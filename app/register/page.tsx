@@ -121,11 +121,11 @@ function RegisterContent() {
               <div className="form-row">
                 <div className="input-group">
                   <label className="input-label">Nombre *</label>
-                  <input className="input" placeholder="Valentina" value={form.firstName} onChange={e => update('firstName', e.target.value)} />
+                  <input className="input" placeholder="Ej: Juan" value={form.firstName} onChange={e => update('firstName', e.target.value)} />
                 </div>
                 <div className="input-group">
                   <label className="input-label">Apellido *</label>
-                  <input className="input" placeholder="Gómez" value={form.lastName} onChange={e => update('lastName', e.target.value)} />
+                  <input className="input" placeholder="Ej: Pérez" value={form.lastName} onChange={e => update('lastName', e.target.value)} />
                 </div>
               </div>
               <div className="input-group">
