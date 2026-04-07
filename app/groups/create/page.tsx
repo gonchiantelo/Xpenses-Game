@@ -226,32 +226,27 @@ export default function CreateGroupPage() {
               <span className="badge badge--accent">{form.members.length}/4</span>
             </div>
 
-            {MOCK_USERS.map(u => {
-              const isMe = u.id === user?.id
-              const isSelected = form.members.includes(u.id)
-              return (
-                <div
-                  key={user.id}
-                  id={`member-${user.id}`}
-                  className={`member-row ${isSelected ? 'selected' : ''}`}
-                  onClick={() => !isMe && toggleMember(user.id)}
-                >
-                  <div className="member-row-ava" style={{ background: user.avatarColor }}>
-                    {user.avatarInitials}
-                  </div>
-                  <div className="member-row-info">
-                    <span className="member-row-name">
-                      {user.firstName} {user.lastName}
-                      {isMe && <span className="badge badge--accent" style={{ marginLeft: 8, fontSize: '0.65rem' }}>Vos</span>}
-                    </span>
-                    <span className="member-row-email">{user.email}</span>
-                  </div>
-                  <div className={`member-check ${isSelected ? 'checked' : ''}`}>
-                    {isSelected ? '✓' : ''}
-                  </div>
+            {user && (
+              <div
+                key={user.id}
+                id={`member-${user.id}`}
+                className="member-row selected"
+              >
+                <div className="member-row-ava" style={{ background: 'var(--color-accent)' }}>
+                  {user.user_metadata?.first_name?.substring(0, 2).toUpperCase() || 'YO'}
                 </div>
-              )
-            })}
+                <div className="member-row-info">
+                  <span className="member-row-name">
+                    {user.user_metadata?.first_name} {user.user_metadata?.last_name}
+                    <span className="badge badge--accent" style={{ marginLeft: 8, fontSize: '0.65rem' }}>Vos</span>
+                  </span>
+                  <span className="member-row-email">{user.email}</span>
+                </div>
+                <div className="member-check checked">
+                  ✓
+                </div>
+              </div>
+            )}
 
             <button id="btn-invite-email" className="btn btn--ghost btn--full" style={{ marginTop: 8 }}>
               + Invitar por email
@@ -277,16 +272,15 @@ export default function CreateGroupPage() {
             </p>
 
             {form.members.map(uid => {
-              const user = MOCK_USERS.find(u => u.id === uid)
-              if (!user) return null
+              const isMe = uid === user?.id
               return (
                 <div key={uid} className="budget-input-row">
-                  <div className="member-row-ava" style={{ background: user.avatarColor }}>
-                    {user.avatarInitials}
+                  <div className="member-row-ava" style={{ background: isMe ? 'var(--color-accent)' : '#94A3B8' }}>
+                    {isMe ? user?.user_metadata?.first_name?.substring(0, 2).toUpperCase() : '👤'}
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 4 }}>
-                      {user.firstName}
+                      {isMe ? 'Tu presupuesto' : 'Miembro'}
                     </div>
                     <div className="input-icon-wrapper">
                       <span className="input-icon" style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-2)' }}>
