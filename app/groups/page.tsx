@@ -1,13 +1,48 @@
 'use client'
 
 import Link from 'next/link'
-import { MOCK_GROUPS, CURRENT_USER, formatAmount, getPaletteById, getUserById } from '@/lib/mockData'
+import { useState, useEffect } from 'react'
+import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/hooks/useAuth'
+import { formatAmount, getPaletteById } from '@/lib/mockData'
 import BottomNav from '@/components/BottomNav'
 
 export default function GroupsPage() {
-  const myGroups = MOCK_GROUPS.filter(g =>
-    g.members.some(m => m.userId === CURRENT_USER.id)
-  )
+  const { user } = useAuth()
+  const [myGroups, setMyGroups] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!user) return
+
+    async function fetchGroups() {
+      // Fetch groups where user is a member
+      const { data, error } = await supabase
+        .from('group_members')
+        .select(`
+          group_id,
+          role,
+          budget,
+          groups (
+            id, name, emoji, type, currency, palette,
+            group_members (
+              user_id,
+              profiles (first_name, last_name, avatar_url)
+            )
+          )
+        `)
+        .eq('user_id', user.id)
+
+      if (!error && data) {
+        setMyGroups(data.map(d => d.groups))
+      }
+      setLoading(false)
+    }
+
+    fetchGroups()
+  }, [user])
+
+  if (loading) return <div className="page"><div className="spinner" /></div>
 
   return (
     <div className="page">
@@ -24,9 +59,6 @@ export default function GroupsPage() {
       <div className="page-content">
         {myGroups.map(group => {
           const palette = getPaletteById(group.palette)
-          const myMember = group.members.find(m => m.userId === CURRENT_USER.id)
-          const pct = myMember ? Math.round((myMember.spent / myMember.budget) * 100) : 0
-
           return (
             <Link
               key={group.id}
@@ -35,11 +67,8 @@ export default function GroupsPage() {
               className="group-full-card"
               style={{ '--accent': palette.color } as React.CSSProperties}
             >
-              {/* Top stripe */}
               <div className="gfc-stripe" style={{ background: palette.color }} />
-
               <div className="gfc-body">
-                {/* Header */}
                 <div className="gfc-header">
                   <div className="gfc-emoji">{group.emoji}</div>
                   <div className="gfc-info">
@@ -51,59 +80,18 @@ export default function GroupsPage() {
                       <span className="badge badge--neutral">{group.currency}</span>
                     </div>
                   </div>
-                  {myMember?.role === 'admin' && (
-                    <span className="badge badge--accent">Admin</span>
-                  )}
                 </div>
 
-                {/* Members */}
                 <div className="gfc-members">
-                  {group.members.map(m => {
-                    const u = getUserById(m.userId)
-                    return u ? (
-                      <div
-                        key={m.userId}
-                        className="member-pill"
-                        title={`${u.firstName} ${u.lastName}`}
-                      >
-                        <div className="member-ava" style={{ background: u.avatarColor }}>
-                          {u.avatarInitials}
-                        </div>
-                        <span>{u.firstName}</span>
+                  {group.group_members?.map((m: any) => (
+                    <div key={m.user_id} className="member-pill">
+                      <div className="member-ava" style={{ background: 'var(--color-surface-3)' }}>
+                        {m.profiles?.first_name?.substring(0, 1) || '👤'}
                       </div>
-                    ) : null
-                  })}
+                      <span>{m.user_id === user.id ? 'Yo' : m.profiles?.first_name}</span>
+                    </div>
+                  ))}
                 </div>
-
-                {/* Budget */}
-                {myMember && (
-                  <div className="gfc-budget">
-                    <div className="gfc-budget-row">
-                      <span className="text-dim" style={{ fontSize: '0.75rem' }}>Mi presupuesto</span>
-                      <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-2)' }}>
-                        {formatAmount(myMember.budget, group.currency)}
-                      </span>
-                    </div>
-                    <div className="gfc-budget-row" style={{ marginTop: 4 }}>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-text)' }}>
-                        {formatAmount(myMember.spent, group.currency)} gastado
-                      </span>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: pct >= 90 ? 'var(--color-danger)' : 'var(--color-success)' }}>
-                        {formatAmount(myMember.budget - myMember.spent, group.currency)} libre
-                      </span>
-                    </div>
-                    <div className="progress-track" style={{ marginTop: 8 }}>
-                      <div
-                        className={`progress-fill ${pct >= 90 ? 'progress-fill--danger' : pct >= 70 ? 'progress-fill--warning' : ''}`}
-                        style={{ width: `${Math.min(pct, 100)}%`, background: pct < 70 ? palette.color : undefined }}
-                      />
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
-                      <span style={{ fontSize: '0.7rem', color: 'var(--color-text-3)' }}>{pct}% utilizado</span>
-                      {pct >= 90 && <span className="badge badge--danger" style={{ fontSize: '0.65rem' }}>⚠️ Cerca del límite</span>}
-                    </div>
-                  </div>
-                )}
               </div>
             </Link>
           )
