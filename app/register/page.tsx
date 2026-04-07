@@ -15,7 +15,17 @@ const COUNTRIES = [
   { code: 'PE', name: '🇵🇪 Perú' },    { code: 'PY', name: '🇵🇾 Paraguay' },
 ]
 
+import { Suspense } from 'react'
+
 export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div className="auth-page"><div className="spinner" /></div>}>
+      <RegisterContent />
+    </Suspense>
+  )
+}
+
+function RegisterContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const inviteCode = searchParams.get('invite') // soporte para invitaciones

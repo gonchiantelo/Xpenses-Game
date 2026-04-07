@@ -9,7 +9,17 @@ import {
 
 type Step = 'monto' | 'categoria' | 'detalles' | 'split'
 
+import { Suspense } from 'react'
+
 export default function AddExpensePage() {
+  return (
+    <Suspense fallback={<div className="page"><div className="spinner" /></div>}>
+      <AddExpenseContent />
+    </Suspense>
+  )
+}
+
+function AddExpenseContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const preGroupId = searchParams.get('group') ?? ''
