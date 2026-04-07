@@ -1,0 +1,29 @@
+# 📁 XPENSES GAME - GITIGNORE
+# Estos archivos NO se deben subir a GitHub porque son muy pesados o sensibles.
+
+# Dependencias (esta es la carpeta "pesada")
+node_modules/
+
+# Pruebas e informes
+coverage/
+
+# Next.js (archivos de compilación automática)
+.next/
+out/
+
+# Variables de Entorno (contiene tus API Keys privadas)
+# NUNCA subas este archivo a GitHub
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs del sistema
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Archivos del Sistema Operativo
+.DS_Store
+Thumbs.db
