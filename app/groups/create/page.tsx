@@ -1,25 +1,36 @@
 'use client'
 
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { useState } from 'react'
-import { CURRENCIES, COLOR_PALETTES, GROUP_TYPES, MOCK_USERS, CURRENT_USER } from '@/lib/mockData'
+import { useAuth } from '@/hooks/useAuth'
+import { supabase } from '@/lib/supabase'
+import { CURRENCIES, COLOR_PALETTES, GROUP_TYPES, MOCK_USERS } from '@/lib/mockData'
 
 const STEPS = ['Grupo', 'Miembros', 'Presupuesto']
 
 export default function CreateGroupPage() {
   const router = useRouter()
+  const { user } = useAuth()
   const [step, setStep] = useState(0)
   const [loading, setLoading] = useState(false)
+  
   const [form, setForm] = useState({
     name: '',
     emoji: '🏠',
     type: 'monthly',
-    currency: '',
+    currency: 'UYU',
     palette: 'violet',
-    members: [CURRENT_USER.id],
+    members: [] as string[],
     budgets: {} as Record<string, string>,
   })
+
+  // Initialize members with current user when auth is ready
+  useEffect(() => {
+    if (user && form.members.length === 0) {
+      setForm(prev => ({ ...prev, members: [user.id] }))
+    }
+  }, [user])
 
   const EMOJIS = ['🏠','✈️','🎉','🍔','💼','🏋️','🐾','📚','🎸','🏖️','🔥','⚡','🌿','🎮','💡']
 
@@ -27,7 +38,7 @@ export default function CreateGroupPage() {
     setForm(prev => ({ ...prev, [field]: val }))
 
   const toggleMember = (uid: string) => {
-    if (uid === CURRENT_USER.id) return // can't remove yourself
+    if (uid === user?.id) return // can't remove yourself
     const current = form.members
     if (current.includes(uid)) {
       update('members', current.filter(id => id !== uid))
@@ -40,12 +51,50 @@ export default function CreateGroupPage() {
     }
   }
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (step < STEPS.length - 1) {
       setStep(s => s + 1)
     } else {
+      if (!user) return
       setLoading(true)
-      setTimeout(() => router.push('/groups'), 1200)
+      
+      try {
+        // 1. Insert Group
+        const { data: group, error: gError } = await supabase
+          .from('groups')
+          .insert({
+            name: form.name,
+            emoji: form.emoji,
+            type: form.type,
+            currency: form.currency,
+            palette: form.palette,
+            owner_id: user.id
+          })
+          .select()
+          .single()
+
+        if (gError) throw gError
+
+        // 2. Insert Members (just me for now, or others if selected)
+        const membersToInsert = form.members.map(uid => ({
+          group_id: group.id,
+          user_id: uid,
+          role: uid === user.id ? 'admin' : 'member',
+          budget: parseFloat(form.budgets[uid] || '0')
+        }))
+
+        const { error: mError } = await supabase
+          .from('group_members')
+          .insert(membersToInsert)
+
+        if (mError) throw mError
+
+        router.push('/dashboard')
+      } catch (err) {
+        console.error('Error creating group:', err)
+        alert('Hubo un error al crear el grupo. Reintenta.')
+        setLoading(false)
+      }
     }
   }
 
@@ -177,9 +226,9 @@ export default function CreateGroupPage() {
               <span className="badge badge--accent">{form.members.length}/4</span>
             </div>
 
-            {MOCK_USERS.map(user => {
-              const isMe = user.id === CURRENT_USER.id
-              const isSelected = form.members.includes(user.id)
+            {MOCK_USERS.map(u => {
+              const isMe = u.id === user?.id
+              const isSelected = form.members.includes(u.id)
               return (
                 <div
                   key={user.id}

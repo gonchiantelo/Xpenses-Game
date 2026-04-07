@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useAuth } from '@/hooks/useAuth'
 import {
-  MOCK_GROUPS, CATEGORIES, CURRENT_USER, MOCK_USERS,
+  MOCK_GROUPS, CATEGORIES, MOCK_USERS,
   formatAmount, getCurrencySymbol, getGroupById
 } from '@/lib/mockData'
 
@@ -13,7 +14,7 @@ import { Suspense } from 'react'
 
 export default function AddExpensePage() {
   return (
-    <Suspense fallback={<div className="page"><div className="spinner" /></div>}>
+    <Suspense fallback={<div className="page-content">Cargando...</div>}>
       <AddExpenseContent />
     </Suspense>
   )
@@ -22,6 +23,7 @@ export default function AddExpensePage() {
 function AddExpenseContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { user } = useAuth()
   const preGroupId = searchParams.get('group') ?? ''
 
   const [step, setStep] = useState<Step>('monto')
@@ -32,7 +34,7 @@ function AddExpenseContent() {
     categoryId: '',
     description: '',
     notes: '',
-    paidById: CURRENT_USER.id,
+    paidById: user?.id,
     date: new Date().toISOString().slice(0, 10),
     isFixed: false,
   })
@@ -150,7 +152,7 @@ function AddExpenseContent() {
                     className={`payer-btn ${form.paidById === u.id ? 'selected' : ''}`}
                     onClick={() => setForm(p => ({ ...p, paidById: u.id }))}>
                     <div className="payer-ava" style={{ background: u.avatarColor }}>{u.avatarInitials}</div>
-                    <span>{u.id === CURRENT_USER.id ? 'Yo' : u.firstName}</span>
+                    <span>{u.id === user?.id ? 'Yo' : u.firstName}</span>
                   </button>
                 ))}
               </div>
@@ -264,7 +266,7 @@ function AddExpenseContent() {
                 <div className="split-ava" style={{ background: u.avatarColor }}>{u.avatarInitials}</div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>
-                    {u.id === CURRENT_USER.id ? 'Yo' : `${u.firstName} ${u.lastName}`}
+                    {u.id === user?.id ? 'Yo' : `${u.firstName} ${u.lastName}`}
                   </div>
                   {amount > 0 && (
                     <div style={{ fontSize: '0.7rem', color: 'var(--color-text-3)' }}>
@@ -309,7 +311,7 @@ function AddExpenseContent() {
               {members.map(u => (
                 <div key={u.id} className="summary-row">
                   <span style={{ fontSize: 'var(--text-sm)' }}>
-                    {u.id === CURRENT_USER.id ? 'Yo' : u.firstName}
+                    {u.id === user?.id ? 'Yo' : u.firstName}
                     {u.id === form.paidById && <span className="badge badge--accent" style={{ marginLeft: 6, fontSize: '0.65rem' }}>Pagó</span>}
                   </span>
                   <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700 }}>
