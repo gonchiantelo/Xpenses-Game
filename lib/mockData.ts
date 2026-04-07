@@ -56,14 +56,9 @@ export interface User {
   avatarColor: string
 }
 
-export const MOCK_USERS: User[] = [
-  { id: 'u1', firstName: 'Valentina', lastName: 'Gómez',   email: 'vale@gmail.com',  country: 'UY', avatarInitials: 'VG', avatarColor: '#7C3AED' },
-  { id: 'u2', firstName: 'Matías',    lastName: 'López',   email: 'mati@gmail.com',  country: 'UY', avatarInitials: 'ML', avatarColor: '#10B981' },
-  { id: 'u3', firstName: 'Sofía',     lastName: 'Martínez',email: 'sofi@gmail.com',  country: 'AR', avatarInitials: 'SM', avatarColor: '#F43F5E' },
-  { id: 'u4', firstName: 'Diego',     lastName: 'Pérez',   email: 'diego@gmail.com', country: 'AR', avatarInitials: 'DP', avatarColor: '#F59E0B' },
-]
+export const MOCK_USERS: User[] = []
 
-export const CURRENT_USER = MOCK_USERS[0]
+export const CURRENT_USER: User | null = null
 
 // ---- GROUPS ----
 export interface GroupMember {
@@ -84,49 +79,7 @@ export interface Group {
   emoji?: string
 }
 
-export const MOCK_GROUPS: Group[] = [
-  {
-    id: 'g1',
-    name: 'Casa',
-    type: 'monthly',
-    currency: 'UYU',
-    palette: 'violet',
-    emoji: '🏠',
-    createdAt: '2024-01-01',
-    members: [
-      { userId: 'u1', role: 'admin',  budget: 25000, spent: 18500 },
-      { userId: 'u2', role: 'editor', budget: 25000, spent: 12300 },
-    ]
-  },
-  {
-    id: 'g2',
-    name: 'Viaje Punta del Este',
-    type: 'travel',
-    currency: 'USD',
-    palette: 'cyan',
-    emoji: '🏖️',
-    createdAt: '2024-03-01',
-    members: [
-      { userId: 'u1', role: 'admin',  budget: 800, spent: 420 },
-      { userId: 'u2', role: 'member', budget: 800, spent: 380 },
-      { userId: 'u3', role: 'member', budget: 800, spent: 290 },
-    ]
-  },
-  {
-    id: 'g3',
-    name: 'Asado del Sábado',
-    type: 'event',
-    currency: 'ARS',
-    palette: 'amber',
-    emoji: '🔥',
-    createdAt: '2024-04-01',
-    members: [
-      { userId: 'u1', role: 'admin',  budget: 50000, spent: 32000 },
-      { userId: 'u3', role: 'member', budget: 50000, spent: 18000 },
-      { userId: 'u4', role: 'member', budget: 50000, spent: 0 },
-    ]
-  },
-]
+export const MOCK_GROUPS: Group[] = []
 
 // ---- EXPENSES ----
 export interface ExpenseSplit {
@@ -149,83 +102,7 @@ export interface Expense {
   splits: ExpenseSplit[]
 }
 
-export const MOCK_EXPENSES: Expense[] = [
-  {
-    id: 'e1', groupId: 'g1', paidById: 'u1',
-    categoryId: 'rent', amount: 28000,
-    description: 'Alquiler Abril', date: '2024-04-01', isFixed: true,
-    notes: 'Transferido el 1ro',
-    splits: [
-      { userId: 'u1', amount: 14000, percentage: 50, isPaid: true },
-      { userId: 'u2', amount: 14000, percentage: 50, isPaid: false },
-    ]
-  },
-  {
-    id: 'e2', groupId: 'g1', paidById: 'u2',
-    categoryId: 'market', amount: 4800,
-    description: 'Supermercado', date: '2024-04-03', isFixed: false,
-    splits: [
-      { userId: 'u1', amount: 2400, percentage: 50, isPaid: false },
-      { userId: 'u2', amount: 2400, percentage: 50, isPaid: true },
-    ]
-  },
-  {
-    id: 'e3', groupId: 'g1', paidById: 'u1',
-    categoryId: 'services', amount: 1200,
-    description: 'Internet', date: '2024-04-05', isFixed: true,
-    splits: [
-      { userId: 'u1', amount: 600, percentage: 50, isPaid: true },
-      { userId: 'u2', amount: 600, percentage: 50, isPaid: false },
-    ]
-  },
-  {
-    id: 'e4', groupId: 'g1', paidById: 'u1',
-    categoryId: 'services', amount: 850,
-    description: 'UTE (Luz)', date: '2024-04-06', isFixed: true,
-    splits: [
-      { userId: 'u1', amount: 425, percentage: 50, isPaid: true },
-      { userId: 'u2', amount: 425, percentage: 50, isPaid: false },
-    ]
-  },
-  {
-    id: 'e5', groupId: 'g1', paidById: 'u2',
-    categoryId: 'food', amount: 2200,
-    description: 'Pizza delivery', date: '2024-04-06', isFixed: false,
-    splits: [
-      { userId: 'u1', amount: 1100, percentage: 50, isPaid: false },
-      { userId: 'u2', amount: 1100, percentage: 50, isPaid: true },
-    ]
-  },
-  {
-    id: 'e6', groupId: 'g1', paidById: 'u1',
-    categoryId: 'leisure', amount: 1800,
-    description: 'Netflix & Spotify', date: '2024-04-02', isFixed: true,
-    splits: [
-      { userId: 'u1', amount: 900, percentage: 50, isPaid: true },
-      { userId: 'u2', amount: 900, percentage: 50, isPaid: false },
-    ]
-  },
-  {
-    id: 'e7', groupId: 'g2', paidById: 'u1',
-    categoryId: 'travel', amount: 360,
-    description: 'Hotel La Barra', date: '2024-03-15', isFixed: false,
-    splits: [
-      { userId: 'u1', amount: 120, percentage: 33.3, isPaid: true },
-      { userId: 'u2', amount: 120, percentage: 33.3, isPaid: false },
-      { userId: 'u3', amount: 120, percentage: 33.3, isPaid: false },
-    ]
-  },
-  {
-    id: 'e8', groupId: 'g2', paidById: 'u2',
-    categoryId: 'food', amount: 180,
-    description: 'Restaurante Il Baretto', date: '2024-03-16', isFixed: false,
-    splits: [
-      { userId: 'u1', amount: 60, percentage: 33.3, isPaid: false },
-      { userId: 'u2', amount: 60, percentage: 33.3, isPaid: true },
-      { userId: 'u3', amount: 60, percentage: 33.3, isPaid: false },
-    ]
-  },
-]
+export const MOCK_EXPENSES: Expense[] = []
 
 // ---- NOTIFICATIONS ----
 export interface AppNotification {
@@ -240,39 +117,7 @@ export interface AppNotification {
   amount?: number
 }
 
-export const MOCK_NOTIFICATIONS: AppNotification[] = [
-  {
-    id: 'n1', type: 'debt',
-    title: '💸 Matías te debe',
-    body: 'Matías debe $U 14.000 por Alquiler Abril en Casa',
-    groupId: 'g1', read: false, createdAt: '2024-04-01T09:00:00Z',
-    fromUserId: 'u2', amount: 14000
-  },
-  {
-    id: 'n2', type: 'budget_warning',
-    title: '⚠️ Presupuesto casi agotado',
-    body: 'Te queda menos del 10% de tu presupuesto en Casa este mes. Llevás $U 22.500 de $U 25.000.',
-    groupId: 'g1', read: false, createdAt: '2024-04-06T14:30:00Z'
-  },
-  {
-    id: 'n3', type: 'fixed_expense',
-    title: '🔄 Gasto fijo registrado',
-    body: 'Internet ($U 1.200) fue registrado automáticamente en Casa',
-    groupId: 'g1', read: true, createdAt: '2024-04-05T00:01:00Z', amount: 1200
-  },
-  {
-    id: 'n4', type: 'payment_received',
-    title: '✅ Pago recibido',
-    body: 'Matías marcó como pagada su parte del Supermercado ($U 2.400) en Casa',
-    groupId: 'g1', read: true, createdAt: '2024-04-04T16:20:00Z', amount: 2400
-  },
-  {
-    id: 'n5', type: 'debt',
-    title: '💸 Sofía te debe',
-    body: 'Sofía debe US$ 120 por Hotel La Barra en Viaje Punta del Este',
-    groupId: 'g2', read: true, createdAt: '2024-03-15T18:00:00Z', amount: 120
-  },
-]
+export const MOCK_NOTIFICATIONS: AppNotification[] = []
 
 // ---- HELPER FUNCTIONS ----
 export function getUserById(id: string): User | undefined {
