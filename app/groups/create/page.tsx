@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/hooks/useAuth'
 import { supabase } from '@/lib/supabase'
-import { CURRENCIES, COLOR_PALETTES, GROUP_TYPES, MOCK_USERS } from '@/lib/mockData'
+import { CURRENCIES, COLOR_PALETTES, GROUP_TYPES } from '@/lib/mockData'
 
 const STEPS = ['Grupo', 'Miembros', 'Presupuesto']
 
@@ -21,34 +21,55 @@ export default function CreateGroupPage() {
     type: 'monthly',
     currency: 'UYU',
     palette: 'violet',
-    members: [] as string[],
+    members: [] as { id: string, name: string, email: string, isMe: boolean }[],
     budgets: {} as Record<string, string>,
   })
 
-  // Initialize members with current user when auth is ready
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [showInviteInput, setShowInviteInput] = useState(false)
+
+  // Initialize members with current user
   useEffect(() => {
     if (user && form.members.length === 0) {
-      setForm(prev => ({ ...prev, members: [user.id] }))
+      setForm(prev => ({
+        ...prev,
+        members: [{
+          id: user.id,
+          name: `${user.user_metadata?.first_name || 'Yo'} ${user.user_metadata?.last_name || ''}`.trim(),
+          email: user.email || '',
+          isMe: true
+        }]
+      }))
     }
   }, [user])
 
-  const EMOJIS = ['🏠','✈️','🎉','🍔','💼','🏋️','🐾','📚','🎸','🏖️','🔥','⚡','🌿','🎮','💡']
+  const EMOJIS = ['🏠','✈️','🎉','🍔','🛒','🚗','🏠','💡','🏥','🎬','✈️','👗','💻','💪','🐾','📚','🎁','📦']
 
   const update = (field: string, val: unknown) =>
     setForm(prev => ({ ...prev, [field]: val }))
 
-  const toggleMember = (uid: string) => {
-    if (uid === user?.id) return // can't remove yourself
-    const current = form.members
-    if (current.includes(uid)) {
-      update('members', current.filter(id => id !== uid))
-    } else {
-      if (current.length >= 4) {
-        alert('La versión gratuita permite máximo 4 personas por grupo')
-        return
-      }
-      update('members', [...current, uid])
+  const addMemberByEmail = () => {
+    if (!inviteEmail || !inviteEmail.includes('@')) {
+      alert('Por favor ingresa un email válido')
+      return
     }
+    if (form.members.length >= 4) {
+      alert('La versión gratuita permite máximo 4 personas')
+      return
+    }
+    const newMember = {
+      id: `temp-${Date.now()}`,
+      name: inviteEmail.split('@')[0],
+      email: inviteEmail,
+      isMe: false
+    }
+    update('members', [...form.members, newMember])
+    setInviteEmail('')
+    setShowInviteInput(false)
+  }
+
+  const removeMember = (id: string) => {
+    update('members', form.members.filter(m => m.id !== id))
   }
 
   const handleNext = async () => {
@@ -59,7 +80,6 @@ export default function CreateGroupPage() {
       setLoading(true)
       
       try {
-        // 1. Insert Group
         const { data: group, error: gError } = await supabase
           .from('groups')
           .insert({
@@ -75,12 +95,11 @@ export default function CreateGroupPage() {
 
         if (gError) throw gError
 
-        // 2. Insert Members (just me for now, or others if selected)
-        const membersToInsert = form.members.map(uid => ({
+        const membersToInsert = form.members.map(m => ({
           group_id: group.id,
-          user_id: uid,
-          role: uid === user.id ? 'admin' : 'member',
-          budget: parseFloat(form.budgets[uid] || '0')
+          user_id: m.isMe ? user.id : null,
+          role: m.isMe ? 'admin' : 'member',
+          budget: parseFloat(form.budgets[m.id] || '0')
         }))
 
         const { error: mError } = await supabase
@@ -91,22 +110,17 @@ export default function CreateGroupPage() {
 
         router.push('/dashboard')
       } catch (err) {
-        console.error('Error creating group:', err)
-        alert('Hubo un error al crear el grupo. Reintenta.')
+        console.error('Error:', err)
+        alert('Error al crear el grupo.')
         setLoading(false)
       }
     }
   }
 
-  const selectedType = GROUP_TYPES.find(t => t.id === form.type)
-  const selectedPalette = COLOR_PALETTES.find(p => p.id === form.palette)
-
   return (
-    <div className="page">
+    <div className="page" style={{ background: 'var(--color-bg)' }}>
       <header className="page-header">
-        <button id="btn-back-create" className="btn btn--icon btn--ghost" onClick={() => step > 0 ? setStep(s => s - 1) : router.back()}>
-          ←
-        </button>
+        <button className="btn btn--icon btn--ghost" onClick={() => step > 0 ? setStep(s => s - 1) : router.back()}>←</button>
         <div style={{ flex: 1, textAlign: 'center' }}>
           <h1 className="page-header__title">Nuevo Grupo</h1>
           <p className="page-header__subtitle">Paso {step + 1} de {STEPS.length}</p>
@@ -114,420 +128,94 @@ export default function CreateGroupPage() {
         <div style={{ width: 44 }} />
       </header>
 
-      {/* Progress */}
       <div className="create-progress">
         {STEPS.map((s, i) => (
-          <div key={s} className={`create-step ${i <= step ? 'active' : ''}`} />
+          <div key={s} style={{ height: 3, flex: 1, background: i <= step ? 'var(--color-accent)' : 'var(--color-surface-2)', borderRadius: 999 }} />
         ))}
       </div>
 
       <div className="page-content">
-        {/* STEP 0: Grupo */}
         {step === 0 && (
           <div className="create-section">
-            {/* Emoji picker */}
             <div className="input-group">
-              <label className="input-label">Ícono del grupo</label>
+              <label className="input-label">Ícono</label>
               <div className="emoji-grid">
-                {EMOJIS.map(e => (
-                  <button
-                    key={e}
-                    id={`emoji-${e}`}
-                    className={`emoji-btn ${form.emoji === e ? 'selected' : ''}`}
-                    onClick={() => update('emoji', e)}
-                  >
-                    {e}
-                  </button>
+                {EMOJIS.slice(0, 15).map(e => (
+                  <button key={e} className={`emoji-btn ${form.emoji === e ? 'selected' : ''}`} onClick={() => update('emoji', e)}>{e}</button>
                 ))}
               </div>
             </div>
 
             <div className="input-group">
-              <label className="input-label" htmlFor="group-name">Nombre del grupo</label>
-              <input
-                id="group-name"
-                className="input"
-                placeholder="Ej: Casa, Viaje Europa..."
-                value={form.name}
-                onChange={e => update('name', e.target.value)}
-              />
+              <label className="input-label">Nombre del grupo</label>
+              <input className="input" placeholder="Ej: Gastos Casa" value={form.name} onChange={e => update('name', e.target.value)} />
             </div>
 
             <div className="input-group">
-              <label className="input-label">Tipo de grupo</label>
-              <div className="type-grid">
-                {GROUP_TYPES.map(t => (
-                  <button
-                    key={t.id}
-                    id={`type-${t.id}`}
-                    className={`type-card ${form.type === t.id ? 'selected' : ''}`}
-                    onClick={() => update('type', t.id)}
-                  >
-                    <span className="type-icon">{t.icon}</span>
-                    <span className="type-name">{t.name}</span>
-                  </button>
-                ))}
-              </div>
-              {selectedType && (
-                <p className="type-desc">{selectedType.description}</p>
-              )}
-            </div>
-
-            <div className="input-group">
-              <label className="input-label" htmlFor="currency-select">Moneda del grupo</label>
-              <select
-                id="currency-select"
-                className="input"
-                value={form.currency}
-                onChange={e => update('currency', e.target.value)}
-                style={{ appearance: 'none' }}
-              >
-                <option value="">Seleccioná una moneda...</option>
-                {CURRENCIES.map(c => (
-                  <option key={c.code} value={c.code}>
-                    {c.flag} {c.name} ({c.symbol})
-                  </option>
-                ))}
+              <label className="input-label">Moneda</label>
+              <select className="input" value={form.currency} onChange={e => update('currency', e.target.value)}>
+                {CURRENCIES.map(c => <option key={c.code} value={c.code}>{c.flag} {c.name}</option>)}
               </select>
             </div>
-
-            <div className="input-group">
-              <label className="input-label">Color del grupo</label>
-              <div className="palette-grid">
-                {COLOR_PALETTES.map(p => (
-                  <button
-                    key={p.id}
-                    id={`palette-${p.id}`}
-                    className={`palette-swatch ${form.palette === p.id ? 'selected' : ''}`}
-                    style={{ background: p.color }}
-                    title={p.name}
-                    onClick={() => update('palette', p.id)}
-                  >
-                    {form.palette === p.id && <span>✓</span>}
-                  </button>
-                ))}
-              </div>
-              <p style={{ fontSize: '0.75rem', color: 'var(--color-text-3)', marginTop: 4 }}>
-                Paleta: <strong style={{ color: selectedPalette?.color }}>{selectedPalette?.name}</strong>
-              </p>
-            </div>
           </div>
         )}
 
-        {/* STEP 1: Miembros */}
         {step === 1 && (
           <div className="create-section">
-            <div className="free-tier-notice">
-              <span>🆓</span>
-              <div>
-                <strong>Plan Gratuito</strong>
-                <p>Máximo 4 personas. <Link href="#" style={{ color: 'var(--color-accent-light)' }}>Upgradear →</Link></p>
-              </div>
-              <span className="badge badge--accent">{form.members.length}/4</span>
+            <div className="member-list">
+              {form.members.map(m => (
+                <div key={m.id} className="member-row">
+                  <div className="member-ava">{m.name.substring(0, 1).toUpperCase()}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>{m.name} {m.isMe && '(Vos)'}</div>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-3)' }}>{m.email}</div>
+                  </div>
+                  {!m.isMe && <button onClick={() => removeMember(m.id)} style={{ background: 'none', border: 'none', color: 'var(--color-danger)', cursor: 'pointer' }}>✕</button>}
+                </div>
+              ))}
             </div>
 
-            {user && (
-              <div
-                key={user.id}
-                id={`member-${user.id}`}
-                className="member-row selected"
-              >
-                <div className="member-row-ava" style={{ background: 'var(--color-accent)' }}>
-                  {user.user_metadata?.first_name?.substring(0, 2).toUpperCase() || 'YO'}
-                </div>
-                <div className="member-row-info">
-                  <span className="member-row-name">
-                    {user.user_metadata?.first_name} {user.user_metadata?.last_name}
-                    <span className="badge badge--accent" style={{ marginLeft: 8, fontSize: '0.65rem' }}>Vos</span>
-                  </span>
-                  <span className="member-row-email">{user.email}</span>
-                </div>
-                <div className="member-check checked">
-                  ✓
-                </div>
+            {showInviteInput ? (
+              <div className="invite-box">
+                <input className="input" placeholder="email@ejemplo.com" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} />
+                <button className="btn btn--primary btn--sm" onClick={addMemberByEmail}>Agregar</button>
               </div>
+            ) : (
+              <button className="btn btn--ghost btn--full" onClick={() => setShowInviteInput(true)}>+ Invitar por email</button>
             )}
-
-            <button id="btn-invite-email" className="btn btn--ghost btn--full" style={{ marginTop: 8 }}>
-              + Invitar por email
-            </button>
           </div>
         )}
 
-        {/* STEP 2: Presupuesto */}
         {step === 2 && (
           <div className="create-section">
-            <div className="budget-header-card">
-              <div style={{ fontSize: '2.5rem' }}>{form.emoji}</div>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 'var(--text-lg)' }}>{form.name || 'Mi Grupo'}</div>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-3)' }}>
-                  {CURRENCIES.find(c => c.code === form.currency)?.flag} {form.currency || '—'} · {form.members.length} personas
-                </div>
+            {form.members.map(m => (
+              <div key={m.id} className="budget-row">
+                <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>Presupuesto para {m.name}</span>
+                <input className="input" type="number" placeholder="0" value={form.budgets[m.id] || ''} onChange={e => update('budgets', { ...form.budgets, [m.id]: e.target.value })} />
               </div>
-            </div>
-
-            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-2)' }}>
-              Asigná el presupuesto mensual de cada integrante. Podés dejarlo en blanco y configurarlo después.
-            </p>
-
-            {form.members.map(uid => {
-              const isMe = uid === user?.id
-              return (
-                <div key={uid} className="budget-input-row">
-                  <div className="member-row-ava" style={{ background: isMe ? 'var(--color-accent)' : '#94A3B8' }}>
-                    {isMe ? user?.user_metadata?.first_name?.substring(0, 2).toUpperCase() : '👤'}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 4 }}>
-                      {isMe ? 'Tu presupuesto' : 'Miembro'}
-                    </div>
-                    <div className="input-icon-wrapper">
-                      <span className="input-icon" style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-2)' }}>
-                        {CURRENCIES.find(c => c.code === form.currency)?.symbol ?? '$'}
-                      </span>
-                      <input
-                        id={`budget-${uid}`}
-                        className="input"
-                        type="number"
-                        placeholder="Presupuesto..."
-                        value={form.budgets[uid] ?? ''}
-                        onChange={e => update('budgets', { ...form.budgets, [uid]: e.target.value })}
-                      />
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-
-            <div className="toggle-row">
-              <div>
-                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>Presupuesto compartido</div>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-3)' }}>Sumar los presupuestos individuales</div>
-              </div>
-              <label className="toggle">
-                <input type="checkbox" />
-                <span className="toggle-slider" />
-              </label>
-            </div>
+            ))}
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-          {step > 0 && (
-            <button className="btn btn--ghost" style={{ flex: 1 }} onClick={() => setStep(s => s - 1)}>
-              ← Atrás
-            </button>
-          )}
-          <button
-            id="btn-create-next"
-            className={`btn btn--primary ${loading ? 'loading' : ''}`}
-            style={{ flex: 2 }}
-            onClick={handleNext}
-            disabled={loading || (step === 0 && (!form.name || !form.currency))}
-          >
-            {loading ? <span className="spinner" /> :
-              step === STEPS.length - 1 ? '🚀 Crear grupo' : 'Continuar →'}
+        <div style={{ display: 'flex', gap: 12, marginTop: 24 }}>
+          {step > 0 && <button className="btn btn--ghost" style={{ flex: 1 }} onClick={() => setStep(s => s - 1)}>Atrás</button>}
+          <button className={`btn btn--primary ${loading ? 'loading' : ''}`} style={{ flex: 2 }} onClick={handleNext} disabled={loading || (step === 0 && !form.name)}>
+            {loading ? '...' : step === 2 ? 'Crear Grupo' : 'Continuar'}
           </button>
         </div>
       </div>
 
       <style jsx>{`
-        .create-progress {
-          display: flex;
-          gap: 4px;
-          padding: 0 var(--space-4) var(--space-2);
-        }
-        .create-step {
-          height: 3px;
-          flex: 1;
-          background: var(--color-surface-2);
-          border-radius: var(--radius-full);
-          transition: background 0.3s;
-        }
-        .create-step.active { background: var(--color-accent); }
-        .create-section {
-          display: flex;
-          flex-direction: column;
-          gap: var(--space-5);
-        }
-        .emoji-grid {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-        }
-        .emoji-btn {
-          width: 44px;
-          height: 44px;
-          border-radius: var(--radius-md);
-          border: 1.5px solid var(--color-border-2);
-          background: var(--color-surface-2);
-          font-size: 1.25rem;
-          cursor: pointer;
-          transition: all 0.15s;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-        .emoji-btn:hover { border-color: var(--color-border); transform: scale(1.1); }
-        .emoji-btn.selected {
-          border-color: var(--color-accent);
-          background: var(--color-accent-dim);
-          transform: scale(1.15);
-          box-shadow: 0 0 12px var(--color-accent-glow);
-        }
-        .type-grid {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: var(--space-3);
-        }
-        .type-card {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: var(--space-2);
-          padding: var(--space-4);
-          background: var(--color-surface-2);
-          border: 1.5px solid var(--color-border-2);
-          border-radius: var(--radius-lg);
-          cursor: pointer;
-          transition: all 0.15s;
-        }
-        .type-card:hover { border-color: var(--color-border); }
-        .type-card.selected {
-          border-color: var(--color-accent);
-          background: var(--color-accent-dim);
-        }
-        .type-icon { font-size: 1.75rem; }
-        .type-name { font-size: var(--text-sm); font-weight: 600; color: var(--color-text); }
-        .type-desc {
-          font-size: var(--text-xs);
-          color: var(--color-text-2);
-          background: var(--color-surface-2);
-          padding: var(--space-3);
-          border-radius: var(--radius-md);
-          border-left: 2px solid var(--color-accent);
-        }
-        .palette-grid {
-          display: flex;
-          gap: var(--space-3);
-          flex-wrap: wrap;
-        }
-        .palette-swatch {
-          width: 40px;
-          height: 40px;
-          border-radius: 50%;
-          border: 3px solid transparent;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: white;
-          font-weight: 700;
-          font-size: 14px;
-          transition: all 0.15s;
-        }
-        .palette-swatch:hover { transform: scale(1.15); }
-        .palette-swatch.selected {
-          border-color: var(--color-text);
-          transform: scale(1.2);
-          box-shadow: 0 0 16px rgba(255,255,255,0.2);
-        }
-        .free-tier-notice {
-          display: flex;
-          align-items: center;
-          gap: var(--space-3);
-          padding: var(--space-3) var(--space-4);
-          background: var(--color-accent-dim);
-          border: 1px solid var(--color-border);
-          border-radius: var(--radius-lg);
-          font-size: var(--text-sm);
-        }
-        .free-tier-notice > span:first-child { font-size: 1.25rem; }
-        .free-tier-notice > div { flex: 1; }
-        .free-tier-notice strong { display: block; font-weight: 600; color: var(--color-text); }
-        .free-tier-notice p { color: var(--color-text-2); margin: 0; font-size: var(--text-xs); }
-        .member-row {
-          display: flex;
-          align-items: center;
-          gap: var(--space-3);
-          padding: var(--space-3) var(--space-4);
-          background: var(--color-surface);
-          border: 1.5px solid var(--color-border-2);
-          border-radius: var(--radius-lg);
-          cursor: pointer;
-          transition: all 0.15s;
-        }
-        .member-row:hover { border-color: var(--color-border); background: var(--color-surface-2); }
-        .member-row.selected {
-          border-color: var(--color-accent);
-          background: var(--color-accent-dim);
-        }
-        .member-row-ava {
-          width: 38px;
-          height: 38px;
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 12px;
-          font-weight: 700;
-          color: white;
-          flex-shrink: 0;
-        }
-        .member-row-info { flex: 1; }
-        .member-row-name { display: block; font-size: var(--text-sm); font-weight: 600; color: var(--color-text); }
-        .member-row-email { font-size: var(--text-xs); color: var(--color-text-3); }
-        .member-check {
-          width: 22px;
-          height: 22px;
-          border-radius: 50%;
-          border: 1.5px solid var(--color-border-2);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 12px;
-          font-weight: 700;
-          color: white;
-          transition: all 0.15s;
-        }
-        .member-check.checked {
-          background: var(--color-accent);
-          border-color: var(--color-accent);
-        }
-        .budget-header-card {
-          display: flex;
-          align-items: center;
-          gap: var(--space-4);
-          background: var(--color-surface-2);
-          border: 1px solid var(--color-border-2);
-          border-radius: var(--radius-xl);
-          padding: var(--space-4);
-        }
-        .budget-input-row {
-          display: flex;
-          align-items: center;
-          gap: var(--space-3);
-        }
-        .toggle-row {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: var(--space-4);
-          background: var(--color-surface-2);
-          border: 1px solid var(--color-border-2);
-          border-radius: var(--radius-lg);
-          padding: var(--space-4);
-        }
+        .create-progress { display: flex; gap: 4px; padding: 0 16px 16px; }
+        .create-section { display: flex; flex-direction: column; gap: 20px; }
+        .emoji-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+        .emoji-btn { font-size: 1.5rem; padding: 10px; border: 1.5px solid var(--color-border-2); background: var(--color-surface-2); border-radius: 8px; cursor: pointer; }
+        .emoji-btn.selected { border-color: var(--color-accent); background: var(--color-accent-dim); }
+        .member-row { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--color-surface-2); border-radius: 12px; }
+        .member-ava { width: 32px; height: 32px; background: var(--color-accent); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 12px; }
+        .invite-box { display: flex; gap: 8px; margin-top: 12px; }
+        .budget-row { display: flex; flex-direction: column; gap: 8px; }
         .btn.loading { opacity: 0.7; cursor: not-allowed; }
-        .spinner {
-          width: 18px; height: 18px;
-          border: 2px solid rgba(255,255,255,0.3);
-          border-top-color: white;
-          border-radius: 50%;
-          animation: spin 0.7s linear infinite;
-          display: inline-block;
-        }
       `}</style>
     </div>
   )
