@@ -110,7 +110,7 @@ export default function GroupsPage() {
         )}
       </div>
 
-      <BottomNav notifCount={2} />
+      <BottomNav notifCount={0} />
 
       <style jsx>{`
         .group-full-card {
