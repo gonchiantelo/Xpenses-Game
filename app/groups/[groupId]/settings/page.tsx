@@ -3,7 +3,7 @@
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/Hooks/useAuth'
+import { useAuth } from '@/hooks/useAuth'
 import { getPaletteById, COLOR_PALETTES } from '@/lib/mockData'
 
 export default function GroupSettingsPage() {

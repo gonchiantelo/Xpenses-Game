@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
-import { formatAmount, getPaletteById, getCategoryById, CATEGORIES } from '@/lib/mockData'
+import { formatAmount, getPaletteById, getCategoryById } from '@/lib/mockData'
 import BottomNav from '@/components/BottomNav'
 
 type Tab = 'gastos' | 'balance' | 'stats'
@@ -48,15 +48,20 @@ export default function GroupDetailPage() {
   }, [groupId, user])
 
   if (loading) return <div className="page"><div className="spinner" /></div>
-  if (!group) return <div className="page" style={{ textAlign: 'center', paddingTop: 100 }}>Grupo no encontrado</div>
+  
+  if (!group || !user) {
+    return <div className="page" style={{ textAlign: 'center', paddingTop: 100 }}>Grupo no encontrado</div>
+  }
 
   const palette = getPaletteById(group.palette)
-  const myMember = members.find(m => m.user_id === user?.id)
+  const currentUserId = user.id
+  const myMember = members.find(m => m.user_id === currentUserId)
+  
   const pct = myMember ? Math.round(((myMember.spent || 0) / (myMember.budget || 1)) * 100) : 0
   const totalGroupSpent = members.reduce((s, m) => s + (m.spent || 0), 0)
 
   const filteredExpenses = paidFilter === 'pendientes'
-    ? expenses.filter(e => e.paid_by_id !== user?.id)
+    ? expenses.filter(e => e.paid_by_id !== currentUserId)
     : expenses
 
   return (
@@ -98,7 +103,7 @@ export default function GroupDetailPage() {
             </div>
           </div>
           <div style={{ padding: '0 16px 8px' }}>
-            <div className="progress-track">
+            <div className="progress-track" style={{ height: 6 }}>
               <div className={`progress-fill ${pct >= 90 ? 'progress-fill--danger' : pct >= 70 ? 'progress-fill--warning' : ''}`}
                 style={{ width: `${Math.min(pct, 100)}%`, background: pct < 70 ? palette.color : undefined }} />
             </div>
@@ -106,10 +111,10 @@ export default function GroupDetailPage() {
           <div className="members-strip">
             {members.map(m => (
               <div key={m.user_id} className="member-stat">
-                <div className="member-stat-ava" style={{ background: 'var(--color-surface-3)', border: m.user_id === user?.id ? `2px solid ${palette.color}` : '2px solid transparent' }}>
+                <div className="member-stat-ava" style={{ background: 'var(--color-surface-3)', border: m.user_id === currentUserId ? `2px solid ${palette.color}` : '2px solid transparent' }}>
                   {m.profiles?.first_name?.substring(0, 1).toUpperCase() || '👤'}
                 </div>
-                <span className="member-stat-name">{m.user_id === user?.id ? 'Yo' : m.profiles?.first_name}</span>
+                <span className="member-stat-name">{m.user_id === currentUserId ? 'Yo' : m.profiles?.first_name}</span>
               </div>
             ))}
           </div>
@@ -131,14 +136,14 @@ export default function GroupDetailPage() {
         {activeTab === 'gastos' && (
           <>
             <div className="filter-row">
-              <button id="filter-todos" className={`filter-btn ${paidFilter === 'todos' ? 'active' : ''}`} onClick={() => setPaidFilter('todos')}>Todos ({expenses.length})</button>
-              <button id="filter-pendientes" className={`filter-btn ${paidFilter === 'pendientes' ? 'active' : ''}`} onClick={() => setPaidFilter('pendientes')}>Pendientes</button>
+              <button className={`filter-btn ${paidFilter === 'todos' ? 'active' : ''}`} onClick={() => setPaidFilter('todos')}>Todos ({expenses.length})</button>
+              <button className={`filter-btn ${paidFilter === 'pendientes' ? 'active' : ''}`} onClick={() => setPaidFilter('pendientes')}>Pendientes</button>
             </div>
             {filteredExpenses.map(expense => {
               const cat = getCategoryById(expense.category_id || '')
-              const isPaidByMe = expense.paid_by_id === user?.id
+              const isPaidByMe = expense.paid_by_id === currentUserId
               return (
-                <div key={expense.id} id={`expense-${expense.id}`} className="expense-item">
+                <div key={expense.id} className="expense-item">
                   <div className="expense-cat-icon" style={{ background: `${cat?.color}22`, color: cat?.color }}>{cat?.icon || '💰'}</div>
                   <div className="expense-info">
                     <div className="expense-top">
