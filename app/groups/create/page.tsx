@@ -66,15 +66,14 @@ export default function CreateGroupPage() {
     } else {
       setLoading(true)
       try {
-        // 1. Crear el grupo
+        // 1. Crear el grupo (Dejamos que owner_id se asigne solo por RLS/Default)
         const { data: group, error: gError } = await supabase
           .from('groups')
           .insert({
             name: form.name,
             emoji: form.emoji,
             currency: form.currency,
-            type: 'monthly', // Por ahora lo ponemos por defecto, luego podés añadir el selector
-            owner_id: user?.id
+            type: 'monthly'
           })
           .select().single()
 

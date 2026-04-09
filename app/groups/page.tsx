@@ -17,32 +17,39 @@ export default function GroupsPage() {
     const currentUserId = user.id
 
     async function fetchGroups() {
-      const { data, error } = await supabase
-        .from('group_members')
-        .select(`
-          group_id,
-          role,
-          budget,
-          groups (
-            id, name, emoji, type, currency, palette,
-            group_members (
-              user_id,
-              profiles (first_name, last_name, avatar_url)
+      try {
+        const { data, error } = await supabase
+          .from('group_members')
+          .select(`
+            role,
+            groups (
+              id, name, emoji, type, currency, palette,
+              group_members (
+                user_id,
+                profiles (first_name, last_name, avatar_url)
+              )
             )
-          )
-        `)
-        .eq('user_id', currentUserId)
+          `)
+          .eq('user_id', currentUserId)
 
-      if (!error && data) {
-        setMyGroups(data.map(d => d.groups))
+        if (error) {
+          console.error('Error de Supabase:', error)
+        } else if (data) {
+          // Filtramos nulos por si el RLS bloquea el acceso al objeto group
+          const groups = data.map(d => d.groups).filter(g => g !== null)
+          setMyGroups(groups)
+        }
+      } catch (err) {
+        console.error('Error fatal al cargar grupos:', err)
+      } finally {
+        setLoading(false)
       }
-      setLoading(false)
     }
 
     fetchGroups()
   }, [user])
 
-  if (loading) return <div className="page"><div className="spinner" /></div>
+  if (loading) return <div className="page" style={{display:'flex',justifyContent:'center',padding:'50px'}}><div className="spinner" /></div>
   if (!user) return null
 
   const userId = user.id
@@ -61,7 +68,8 @@ export default function GroupsPage() {
 
       <div className="page-content">
         {myGroups.map(group => {
-          const palette = getPaletteById(group.palette)
+          if (!group) return null // Seguridad extra
+          const palette = getPaletteById(group.palette || 'violet')
           return (
             <Link
               key={group.id}
@@ -91,7 +99,7 @@ export default function GroupsPage() {
                       <div className="member-ava" style={{ background: 'var(--color-surface-3)' }}>
                         {m.profiles?.first_name?.substring(0, 1) || '👤'}
                       </div>
-                      <span>{m.user_id === userId ? 'Yo' : m.profiles?.first_name}</span>
+                      <span>{m.user_id === userId ? 'Yo' : m.profiles?.first_name || 'Invitado'}</span>
                     </div>
                   ))}
                 </div>

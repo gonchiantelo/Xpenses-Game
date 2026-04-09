@@ -45,6 +45,24 @@ function AddExpenseContent() {
   const [splits, setSplits] = useState<Record<string, number>>({})
   const [splitMode, setSplitMode] = useState<'equal' | 'manual'>('equal')
 
+  const [myGroups, setMyGroups] = useState<any[]>([])
+  const [fetchingGroups, setFetchingGroups] = useState(false)
+
+  // Fetch groups if no groupId is pre-selected
+  useEffect(() => {
+    if (!user) return
+    async function fetchMyGroups() {
+      setFetchingGroups(true)
+      const { data } = await supabase
+        .from('group_members')
+        .select('groups (*)')
+        .eq('user_id', user?.id)
+      if (data) setMyGroups(data.map(d => d.groups))
+      setFetchingGroups(false)
+    }
+    fetchMyGroups()
+  }, [user])
+
   // Initial setup when user or group changes
   useEffect(() => {
     if (!user) return
@@ -159,6 +177,22 @@ function AddExpenseContent() {
       <div className="page-content">
         {step === 'monto' && (
           <div className="step-section">
+            
+            <div className="input-group">
+              <label className="input-label">Seleccionar Grupo</label>
+              <select 
+                className="input" 
+                value={form.groupId} 
+                onChange={e => setForm(p => ({ ...p, groupId: e.target.value }))}
+                style={{ background: 'var(--color-surface-2)' }}
+              >
+                <option value="">-- Elegir grupo --</option>
+                {myGroups.map(g => (
+                  <option key={g.id} value={g.id}>{g.emoji} {g.name}</option>
+                ))}
+              </select>
+            </div>
+
             <div className="amount-block">
               <div className="currency-symbol">{symbol}</div>
               <input
@@ -173,19 +207,22 @@ function AddExpenseContent() {
               />
             </div>
 
-            <div className="input-group">
-              <label className="input-label">¿Quién pagó?</label>
-              <div className="payer-row">
-                {members.map(u => (
-                  <button key={u.id} id={`payer-${u.id}`}
-                    className={`payer-btn ${form.paidById === u.id ? 'selected' : ''}`}
-                    onClick={() => setForm(p => ({ ...p, paidById: u.id }))}>
-                    <div className="payer-ava" style={{ background: u.avatarColor }}>{u.avatarInitials}</div>
-                    <span>{u.id === user?.id ? 'Yo' : u.firstName}</span>
-                  </button>
-                ))}
+            {form.groupId && (
+              <div className="input-group">
+                <label className="input-label">¿Quién pagó?</label>
+                <div className="payer-row">
+                  {members.map(u => (
+                    <button key={u.id} id={`payer-${u.id}`}
+                      className={`payer-btn ${form.paidById === u.id ? 'selected' : ''}`}
+                      onClick={() => setForm(p => ({ ...p, paidById: u.id }))}>
+                      <div className="payer-ava" style={{ background: u.avatarColor }}>{u.avatarInitials}</div>
+                      <span>{u.id === user?.id ? 'Yo' : u.firstName}</span>
+                    </button>
+                  ))}
+                  {members.length === 0 && <p style={{ fontSize: '0.7rem', opacity: 0.5 }}>Cargando integrantes...</p>}
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="input-group">
               <label className="input-label">Fecha</label>
