@@ -3,7 +3,7 @@
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/Hooks/useAuth'
+import { useAuth } from '@/hooks/useAuth'
 import { getPaletteById, COLOR_PALETTES } from '@/lib/mockData'
 
 export default function GroupSettingsPage() {
@@ -11,10 +11,10 @@ export default function GroupSettingsPage() {
   const params = useParams()
   const searchParams = useSearchParams()
   const { user } = useAuth()
-
-  const action = searchParams.get('action')
+  
+  const action = searchParams.get('action') 
   const groupId = params.groupId as string
-
+  
   const [group, setGroup] = useState<any>(null)
   const [members, setMembers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -26,13 +26,13 @@ export default function GroupSettingsPage() {
   useEffect(() => {
     async function fetchGroupData() {
       if (!groupId) return
-
+      
       const { data: gData, error: gErr } = await supabase
         .from('groups')
         .select('*')
         .eq('id', groupId)
         .single()
-
+      
       if (gData) {
         setGroup(gData)
         setFormName(gData.name)
