@@ -14,9 +14,9 @@ export default function GroupsPage() {
 
   useEffect(() => {
     if (!user) return
+    const currentUserId = user.id
 
     async function fetchGroups() {
-      // Fetch groups where user is a member
       const { data, error } = await supabase
         .from('group_members')
         .select(`
@@ -31,7 +31,7 @@ export default function GroupsPage() {
             )
           )
         `)
-        .eq('user_id', user.id)
+        .eq('user_id', currentUserId)
 
       if (!error && data) {
         setMyGroups(data.map(d => d.groups))
@@ -43,6 +43,9 @@ export default function GroupsPage() {
   }, [user])
 
   if (loading) return <div className="page"><div className="spinner" /></div>
+  if (!user) return null
+
+  const userId = user.id
 
   return (
     <div className="page">
@@ -88,7 +91,7 @@ export default function GroupsPage() {
                       <div className="member-ava" style={{ background: 'var(--color-surface-3)' }}>
                         {m.profiles?.first_name?.substring(0, 1) || '👤'}
                       </div>
-                      <span>{m.user_id === user.id ? 'Yo' : m.profiles?.first_name}</span>
+                      <span>{m.user_id === userId ? 'Yo' : m.profiles?.first_name}</span>
                     </div>
                   ))}
                 </div>
@@ -110,7 +113,7 @@ export default function GroupsPage() {
         )}
       </div>
 
-      <BottomNav notifCount={0} />
+      <BottomNav />
 
       <style jsx>{`
         .group-full-card {
