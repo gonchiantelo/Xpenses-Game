@@ -3,7 +3,7 @@
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/hooks/useAuth'
+import { useAuth } from '@/Hooks/useAuth'
 import { getPaletteById, COLOR_PALETTES } from '@/lib/mockData'
 
 export default function GroupSettingsPage() {
@@ -27,7 +27,7 @@ export default function GroupSettingsPage() {
     async function fetchGroupData() {
       if (!groupId) return
       
-      const { data: gData, error: gErr } = await supabase
+      const { data: gData } = await supabase
         .from('groups')
         .select('*')
         .eq('id', groupId)
@@ -64,9 +64,13 @@ export default function GroupSettingsPage() {
   }
 
   if (loading) return <div className="page"><div className="spinner" /></div>
-  if (!group || !user) return null
+  
+  if (!group || !user) {
+    return <div className="page" style={{ textAlign: 'center', paddingTop: 100 }}>No se encontró la información</div>
+  }
 
-  const myMember = members.find(m => m.user_id === user.id)
+  const currentUserId = user.id
+  const myMember = members.find(m => m.user_id === currentUserId)
   const isAdmin = myMember?.role === 'admin'
 
   const handleSave = async () => {
