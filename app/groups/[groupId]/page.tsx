@@ -53,14 +53,19 @@ export default function GroupDetailPage() {
     return <div className="page" style={{ textAlign: 'center', paddingTop: 100 }}>Grupo no encontrado</div>
   }
 
-  const palette = getPaletteById(group.palette)
+  const palette = getPaletteById(group.palette || 'violet')
   const currentUserId = user.id
   const myMember = members.find(m => m.user_id === currentUserId)
-  
-  const pct = myMember ? Math.round(((myMember.spent || 0) / (myMember.budget || 1)) * 100) : 0
+
   // MOTOR FINANCIERO: Cálculo de balances y deudas
   const totalSpent = expenses.reduce((s, e) => s + (e.amount || 0), 0)
   const sharePerPerson = members.length > 0 ? totalSpent / members.length : 0
+  
+  const mySpent = expenses
+    .filter(e => e.paid_by_id === currentUserId)
+    .reduce((s, e) => s + (e.amount || 0), 0)
+
+  const pct = myMember ? Math.round((mySpent / (myMember.budget || 1)) * 100) : 0
 
   // 1. Calcular cuánto puso cada uno
   const memberContributions = members.map(m => {
@@ -97,6 +102,7 @@ export default function GroupDetailPage() {
       to: c.name,
       amount: amount
     })
+
     tempDebtors[dIdx].balance += amount
     tempCreditors[cIdx].balance -= amount
 
