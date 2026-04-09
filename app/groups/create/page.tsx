@@ -66,6 +66,7 @@ export default function CreateGroupPage() {
     } else {
       setLoading(true)
       try {
+        // 1. Crear el grupo
         const { data: group, error: gError } = await supabase
           .from('groups')
           .insert({
@@ -76,19 +77,36 @@ export default function CreateGroupPage() {
           })
           .select().single()
 
-        if (gError) throw gError
+        if (gError) {
+          console.error('Error al insertar grupo:', gError)
+          throw gError
+        }
 
-        const membersToInsert = form.members.map(m => ({
-          group_id: group.id,
-          user_id: m.isMe ? user?.id : null,
-          role: m.isMe ? 'admin' : 'member',
-          budget: parseFloat(form.budgets[m.id] || '0')
-        }))
+        // 2. Insertar los miembros
+        // IMPORTANTE: Con tu política actual (auth.uid() = user_id), 
+        // solo el dueño puede ser insertado en este paso.
+        const membersToInsert = form.members
+          .filter(m => m.isMe || m.id === user?.id) // Solo insertamos al dueño por ahora para no romper el RLS
+          .map(m => ({
+            group_id: group.id,
+            user_id: user?.id,
+            role: 'admin',
+            budget: parseFloat(form.budgets[m.id] || '0')
+          }))
 
-        await supabase.from('group_members').insert(membersToInsert)
+        const { error: mError } = await supabase
+          .from('group_members')
+          .insert(membersToInsert)
+
+        if (mError) {
+          console.error('Error al insertar miembros:', mError)
+          throw mError
+        }
+
         router.push('/dashboard')
-      } catch (err) {
-        alert('Error al crear grupo')
+      } catch (err: any) {
+        console.error('Detalle del error:', err)
+        alert(`Error: ${err.message || 'Error al crear grupo'}`)
         setLoading(false)
       }
     }
