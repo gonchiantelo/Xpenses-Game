@@ -73,6 +73,7 @@ export default function CreateGroupPage() {
             name: form.name,
             emoji: form.emoji,
             currency: form.currency,
+            type: 'monthly', // Por ahora lo ponemos por defecto, luego podés añadir el selector
             owner_id: user?.id
           })
           .select().single()
