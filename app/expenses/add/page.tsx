@@ -76,18 +76,31 @@ function AddExpenseContent() {
       const { data: gData } = await supabase.from('groups').select('*').eq('id', form.groupId).single()
       if (gData) setGroup(gData)
 
-      const { data: mData } = await supabase.from('group_members')
-        .select(`*, profiles(first_name, last_name, avatar_url)`)
+      // Traer miembros con sus perfiles
+      const { data: mData, error: mError } = await supabase.from('group_members')
+        .select(`
+          user_id,
+          role,
+          profiles (
+            id,
+            first_name,
+            last_name,
+            avatar_url
+          )
+        `)
         .eq('group_id', form.groupId)
+      
       if (mData) {
         const enriched = mData.map(m => ({
           id: m.user_id,
-          firstName: m.profiles?.first_name || 'Usuario',
-          lastName: m.profiles?.last_name || '',
+          firstName: (m as any).profiles?.first_name || 'Amigo',
+          lastName: (m as any).profiles?.last_name || '',
           avatarColor: getPaletteById(gData?.palette || 'violet').color,
-          avatarInitials: m.profiles?.first_name?.substring(0, 1) || '👤'
+          avatarInitials: (m as any).profiles?.first_name?.substring(0, 1) || '👤'
         }))
         setMembers(enriched)
+      } else if (mError) {
+        console.error('Error cargando miembros:', mError)
       }
     }
 

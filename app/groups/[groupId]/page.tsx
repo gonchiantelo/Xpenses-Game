@@ -58,7 +58,53 @@ export default function GroupDetailPage() {
   const myMember = members.find(m => m.user_id === currentUserId)
   
   const pct = myMember ? Math.round(((myMember.spent || 0) / (myMember.budget || 1)) * 100) : 0
-  const totalGroupSpent = members.reduce((s, m) => s + (m.spent || 0), 0)
+  // MOTOR FINANCIERO: Cálculo de balances y deudas
+  const totalSpent = expenses.reduce((s, e) => s + (e.amount || 0), 0)
+  const sharePerPerson = members.length > 0 ? totalSpent / members.length : 0
+
+  // 1. Calcular cuánto puso cada uno
+  const memberContributions = members.map(m => {
+    const paidByThisMember = expenses
+      .filter(e => e.paid_by_id === m.user_id)
+      .reduce((s, e) => s + (e.amount || 0), 0)
+    
+    return {
+      userId: m.user_id,
+      name: m.profiles?.first_name || 'Amigo',
+      paid: paidByThisMember,
+      balance: paidByThisMember - sharePerPerson
+    }
+  })
+
+  // 2. Calcular liquidaciones (Quién debe a quién)
+  const debtors = memberContributions.filter(m => m.balance < -0.01).sort((a, b) => a.balance - b.balance)
+  const creditors = memberContributions.filter(m => m.balance > 0.01).sort((a, b) => b.balance - a.balance)
+  
+  const settlements: any[] = []
+  const tempDebtors = JSON.parse(JSON.stringify(debtors))
+  const tempCreditors = JSON.parse(JSON.stringify(creditors))
+
+  let dIdx = 0
+  let cIdx = 0
+
+  while (dIdx < tempDebtors.length && cIdx < tempCreditors.length) {
+    const d = tempDebtors[dIdx]
+    const c = tempCreditors[cIdx]
+    const amount = Math.min(Math.abs(d.balance), c.balance)
+    
+    settlements.push({
+      from: d.name,
+      to: c.name,
+      amount: amount
+    })
+    tempDebtors[dIdx].balance += amount
+    tempCreditors[cIdx].balance -= amount
+
+    if (Math.abs(tempDebtors[dIdx].balance) < 0.01) dIdx++
+    if (Math.abs(tempCreditors[cIdx].balance) < 0.01) cIdx++
+  }
+
+  const totalGroupSpent = totalSpent
 
   const filteredExpenses = paidFilter === 'pendientes'
     ? expenses.filter(e => e.paid_by_id !== currentUserId)
@@ -84,21 +130,25 @@ export default function GroupDetailPage() {
         <div className="budget-hero">
           <div className="bhs-row">
             <div className="bhs-item">
-              <span className="bhs-label">Presupuesto</span>
-              <span className="bhs-value">{formatAmount(myMember.budget, group.currency)}</span>
+              <span className="bhs-label">Total Gasto</span>
+              <span className="bhs-value">{formatAmount(totalSpent, group.currency)}</span>
             </div>
             <div className="bhs-div" />
             <div className="bhs-item">
-              <span className="bhs-label">Gastado</span>
-              <span className="bhs-value" style={{ color: pct >= 90 ? 'var(--color-danger)' : undefined }}>
-                {formatAmount(myMember.spent || 0, group.currency)}
+              <span className="bhs-label">Tu Saldo</span>
+              <span className="bhs-value" style={{ 
+                color: (memberContributions.find(m => m.userId === currentUserId)?.balance || 0) >= 0 
+                  ? 'var(--color-success)' 
+                  : 'var(--color-danger)' 
+              }}>
+                {formatAmount(memberContributions.find(m => m.userId === currentUserId)?.balance || 0, group.currency)}
               </span>
             </div>
             <div className="bhs-div" />
             <div className="bhs-item">
-              <span className="bhs-label">Disponible</span>
-              <span className="bhs-value" style={{ color: 'var(--color-success)' }}>
-                {formatAmount(myMember.budget - (myMember.spent || 0), group.currency)}
+              <span className="bhs-label">Presupuesto</span>
+              <span className="bhs-value">
+                {formatAmount(myMember.budget, group.currency)}
               </span>
             </div>
           </div>
@@ -137,11 +187,13 @@ export default function GroupDetailPage() {
           <>
             <div className="filter-row">
               <button className={`filter-btn ${paidFilter === 'todos' ? 'active' : ''}`} onClick={() => setPaidFilter('todos')}>Todos ({expenses.length})</button>
-              <button className={`filter-btn ${paidFilter === 'pendientes' ? 'active' : ''}`} onClick={() => setPaidFilter('pendientes')}>Pendientes</button>
+              <button className={`filter-btn ${paidFilter === 'pendientes' ? 'active' : ''}`} onClick={() => setPaidFilter('pendientes')}>De otros</button>
             </div>
             {filteredExpenses.map(expense => {
               const cat = getCategoryById(expense.category_id || '')
               const isPaidByMe = expense.paid_by_id === currentUserId
+              const payerName = members.find(m => m.user_id === expense.paid_by_id)?.profiles?.first_name || 'Alguien'
+              
               return (
                 <div key={expense.id} className="expense-item">
                   <div className="expense-cat-icon" style={{ background: `${cat?.color}22`, color: cat?.color }}>{cat?.icon || '💰'}</div>
@@ -153,7 +205,7 @@ export default function GroupDetailPage() {
                     <div className="expense-bottom">
                       <span className="expense-meta">{new Date(expense.date).toLocaleDateString()}</span>
                       <span className={`expense-split ${isPaidByMe ? 'paid' : 'pending'}`}>
-                        {isPaidByMe ? 'Pagaste tú' : 'Pendiente'}
+                        {isPaidByMe ? 'Pagaste tú' : `Pagó ${payerName}`}
                       </span>
                     </div>
                   </div>
@@ -171,19 +223,48 @@ export default function GroupDetailPage() {
 
         {activeTab === 'balance' && (
           <>
-            <div className="balance-card">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <span style={{ fontSize: '2rem' }}>💰</span>
-                <div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--color-text-3)', textTransform: 'uppercase' }}>Total del grupo</div>
-                  <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 800 }}>{formatAmount(totalGroupSpent, group.currency)}</div>
+            <div className="balance-grid" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {memberContributions.map(mc => (
+                <div key={mc.userId} className="balance-card" style={{ padding: '15px', marginBottom: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontWeight: 700 }}>{mc.userId === currentUserId ? 'Tú' : mc.name}</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--color-text-3)' }}>Puso {formatAmount(mc.paid, group.currency)}</div>
+                    </div>
+                    <div style={{ 
+                      textAlign: 'right', 
+                      color: mc.balance >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
+                      fontWeight: 800
+                    }}>
+                      {mc.balance >= 0 ? '+' : ''}{formatAmount(mc.balance, group.currency)}
+                    </div>
+                  </div>
                 </div>
-              </div>
+              ))}
             </div>
-            <div className="empty-state">
-              <span style={{ fontSize: '2.5rem' }}>🤝</span>
-              <h4 style={{ fontWeight: 700, marginTop: 8 }}>¡Estamos al día!</h4>
-              <p style={{ color: 'var(--color-text-2)', fontSize: 'var(--text-sm)' }}>No hay deudas pendientes</p>
+
+            <div style={{ marginTop: 24 }}>
+              <h4 style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--color-text-3)', marginBottom: 12 }}>Liquidaciones</h4>
+              {settlements.map((s, i) => (
+                <div key={i} className="settlement-item" style={{ 
+                  background: 'var(--color-surface-2)', 
+                  padding: '12px', 
+                  borderRadius: '12px',
+                  marginBottom: 8,
+                  fontSize: 'var(--text-sm)',
+                  display: 'flex',
+                  justifyContent: 'space-between'
+                }}>
+                  <span><b>{s.from}</b> le debe a <b>{s.to}</b></span>
+                  <span style={{ fontWeight: 700, color: 'var(--color-accent)' }}>{formatAmount(s.amount, group.currency)}</span>
+                </div>
+              ))}
+              {settlements.length === 0 && (
+                <div className="empty-state">
+                  <span style={{ fontSize: '2.5rem' }}>🤝</span>
+                  <p style={{ color: 'var(--color-text-2)', fontSize: 'var(--text-sm)' }}>¡Todo está saldado!</p>
+                </div>
+              )}
             </div>
           </>
         )}
