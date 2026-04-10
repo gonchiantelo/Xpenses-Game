@@ -22,104 +22,61 @@ export default function AddExpensePage() {
   )
 }
 
+import { useXpenses } from '@/hooks/useXpenses'
+
 function AddExpenseContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { user } = useAuth()
+  const { groups, loading: loadingData } = useXpenses()
   const preGroupId = searchParams.get('group') ?? ''
 
   const [step, setStep] = useState<Step>('monto')
   const [loading, setLoading] = useState(false)
-  const [group, setGroup] = useState<any>(null)
-  const [members, setMembers] = useState<any[]>([])
+  
   const [form, setForm] = useState({
     groupId: preGroupId,
     amount: '',
     categoryId: '',
     description: '',
     notes: '',
-    paidById: '',
+    paidById: user?.id || '',
     date: new Date().toISOString().slice(0, 10),
     isFixed: false,
   })
+
   const [splits, setSplits] = useState<Record<string, number>>({})
   const [splitMode, setSplitMode] = useState<'equal' | 'manual'>('equal')
 
-  const [myGroups, setMyGroups] = useState<any[]>([])
-  const [fetchingGroups, setFetchingGroups] = useState(false)
+  // Derivamos el grupo actual y sus miembros del hook central
+  const currentGroup = groups.find(g => g.id === form.groupId)
+  const groupMembers = currentGroup?.members?.map(m => ({
+    id: m.user_id,
+    firstName: m.profiles?.first_name || 'Amigo',
+    lastName: m.profiles?.last_name || '',
+    avatarColor: getPaletteById(currentGroup.palette || 'violet').color,
+    avatarInitials: m.profiles?.first_name?.substring(0, 1) || '👤'
+  })) || []
 
-  // Fetch groups if no groupId is pre-selected
   useEffect(() => {
-    if (!user) return
-    async function fetchMyGroups() {
-      setFetchingGroups(true)
-      const { data } = await supabase
-        .from('group_members')
-        .select('groups (*)')
-        .eq('user_id', user?.id)
-      if (data) setMyGroups(data.map(d => d.groups))
-      setFetchingGroups(false)
+    if (user && !form.paidById) {
+      setForm(p => ({ ...p, paidById: user.id }))
     }
-    fetchMyGroups()
-  }, [user])
+  }, [user, form.paidById])
 
-  // Initial setup when user or group changes
-  useEffect(() => {
-    if (!user) return
-    setForm(p => ({ ...p, paidById: user.id }))
-  }, [user])
-
-  useEffect(() => {
-    if (!form.groupId) return
-
-    async function fetchGroupInfo() {
-      const { data: gData } = await supabase.from('groups').select('*').eq('id', form.groupId).single()
-      if (gData) setGroup(gData)
-
-      // Traer miembros con sus perfiles
-      const { data: mData, error: mError } = await supabase.from('group_members')
-        .select(`
-          user_id,
-          role,
-          profiles (
-            id,
-            first_name,
-            last_name,
-            avatar_url
-          )
-        `)
-        .eq('group_id', form.groupId)
-      
-      if (mData) {
-        const enriched = mData.map(m => ({
-          id: m.user_id,
-          firstName: (m as any).profiles?.first_name || 'Amigo',
-          lastName: (m as any).profiles?.last_name || '',
-          avatarColor: getPaletteById(gData?.palette || 'violet').color,
-          avatarInitials: (m as any).profiles?.first_name?.substring(0, 1) || '👤'
-        }))
-        setMembers(enriched)
-      } else if (mError) {
-        console.error('Error cargando miembros:', mError)
-      }
-    }
-
-    fetchGroupInfo()
-  }, [form.groupId])
-
-  const currency = group?.currency ?? 'UYU'
+  const currency = currentGroup?.currency ?? 'UYU'
   const symbol = getCurrencySymbol(currency)
 
   useEffect(() => {
-    if (!members.length || !form.amount) return
+    if (!groupMembers.length || !form.amount) return
     const amt = parseFloat(form.amount)
     if (isNaN(amt)) return
-    const n = members.length
+    const n = groupMembers.length
     const equal = Math.round((amt / n) * 100) / 100
     const s: Record<string, number> = {}
-    members.forEach(m => { s[m.id] = equal })
+    groupMembers.forEach((m: any) => { s[m.id] = equal })
     setSplits(s)
-  }, [members, form.amount])
+  }, [groupMembers, form.amount])
 
   const STEPS: Step[] = ['monto', 'categoria', 'detalles', 'split']
   const stepIdx = STEPS.indexOf(step)
@@ -149,8 +106,29 @@ function AddExpenseContent() {
       
       if (error) {
         alert('Error al guardar el gasto: ' + error.message)
-        setLoading(false)
+        setLoading(true)
       } else {
+        // LÓGICA DE NOTIFICACIONES (Punto 4 del plan)
+        try {
+          const newAmt = parseFloat(form.amount)
+          const newRemaining = (currentGroup?.groupAvailable || 0) - newAmt
+          const payerName = groupMembers.find(m => m.id === form.paidById)?.firstName || 'Alguien'
+          
+          const notifs = currentGroup?.members.map((m: any) => ({
+            user_id: m.user_id,
+            group_id: form.groupId,
+            type: newRemaining < 0 ? 'overbudget' : 'expense',
+            title: newRemaining < 0 ? '🚨 ¡Presupuesto Excedido!' : '💰 Nuevo Gasto',
+            message: `${payerName} gastó ${formatAmount(newAmt, currency)} en ${currentGroup.name}. ${newRemaining < 0 ? `Estamos excedidos por ${formatAmount(Math.abs(newRemaining), currency)}` : `Quedan ${formatAmount(newRemaining, currency)}`}`
+          }))
+
+          if (notifs && notifs.length > 0) {
+            await supabase.from('notifications').insert(notifs)
+          }
+        } catch (nErr) {
+          console.error('Error enviando notificaciones:', nErr)
+        }
+        
         router.push(`/groups/${form.groupId}`)
       }
     }
@@ -200,7 +178,7 @@ function AddExpenseContent() {
                 style={{ background: 'var(--color-surface-2)' }}
               >
                 <option value="">-- Elegir grupo --</option>
-                {myGroups.map(g => (
+                {groups.map((g: any) => (
                   <option key={g.id} value={g.id}>{g.emoji} {g.name}</option>
                 ))}
               </select>
@@ -224,7 +202,7 @@ function AddExpenseContent() {
               <div className="input-group">
                 <label className="input-label">¿Quién pagó?</label>
                 <div className="payer-row">
-                  {members.map(u => (
+                  {groupMembers.map((u: any) => (
                     <button key={u.id} id={`payer-${u.id}`}
                       className={`payer-btn ${form.paidById === u.id ? 'selected' : ''}`}
                       onClick={() => setForm(p => ({ ...p, paidById: u.id }))}>
@@ -232,7 +210,7 @@ function AddExpenseContent() {
                       <span>{u.id === user?.id ? 'Yo' : u.firstName}</span>
                     </button>
                   ))}
-                  {members.length === 0 && <p style={{ fontSize: '0.7rem', opacity: 0.5 }}>Cargando integrantes...</p>}
+                  {groupMembers.length === 0 && <p style={{ fontSize: '0.7rem', opacity: 0.5 }}>Cargando integrantes...</p>}
                 </div>
               </div>
             )}
@@ -313,7 +291,7 @@ function AddExpenseContent() {
                 onClick={() => setSplitMode('manual')}>✏️ Manual</button>
             </div>
 
-            {members.map(u => (
+            {groupMembers.map((u: any) => (
               <div key={u.id} className="split-row">
                 <div className="split-ava" style={{ background: u.avatarColor }}>{u.avatarInitials}</div>
                 <div style={{ flex: 1 }}>

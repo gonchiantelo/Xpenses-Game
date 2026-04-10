@@ -8,41 +8,14 @@ import { useAuth } from '@/hooks/useAuth'
 import { formatAmount, getCurrencySymbol, getPaletteById } from '@/lib/mockData'
 import BottomNav from '@/components/BottomNav'
 
+import { useXpenses } from '@/hooks/useXpenses'
+
 export default function DashboardPage() {
   const router = useRouter()
   const { user, loading: authLoading } = useAuth()
-  const [groups, setGroups] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const { groups, loading: groupsLoading, error } = useXpenses()
 
-  useEffect(() => {
-    if (!user) return
-
-    async function fetchDashboardData() {
-      // 1. Fetch user's groups
-      const { data: members, error } = await supabase
-        .from('group_members')
-        .select('*, groups(*)')
-        .eq('user_id', user?.id)
-
-      if (error) {
-        console.error('Error fetching groups:', error)
-      } else {
-        const enrichedGroups = (members || []).map(m => ({
-          ...m.groups,
-          myBudget: m.budget,
-          mySpent: m.spent,
-          myAvailable: m.budget - m.spent,
-          pct: m.budget > 0 ? Math.round((m.spent / m.budget) * 100) : 0,
-        }))
-        setGroups(enrichedGroups)
-      }
-      setLoading(false)
-    }
-
-    fetchDashboardData()
-  }, [user])
-
-  if (authLoading || loading) {
+  if (authLoading || groupsLoading) {
     return (
       <div className="page" style={{ justifyContent: 'center', alignItems: 'center' }}>
         <span className="spinner" />
@@ -50,14 +23,16 @@ export default function DashboardPage() {
     )
   }
 
-  // Calculate totals
-  const totals = groups.reduce((acc, g) => {
-    acc[g.currency] = (acc[g.currency] || 0) + g.myAvailable
-    return acc
-  }, {} as Record<string, number>)
-
   const mainCurrency = 'UYU'
-  const mainTotal = totals[mainCurrency] || 0
+  
+  // LÓGICA MOF: Totales agregados de la Caja Única
+  const totalBudget = groups.reduce((acc, g) => acc + (g.currency === mainCurrency ? g.groupTotalBudget : 0), 0)
+  const totalSpent = groups.reduce((acc, g) => acc + (g.currency === mainCurrency ? g.groupTotalSpent : 0), 0)
+  const totalAvailableRemaining = totalBudget - totalSpent
+  const globalPct = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0
+  
+  const isGlobalOver = totalAvailableRemaining < 0
+  const overallBurnRate = groups.some(g => g.burnRate === 'high' || g.burnRate === 'critical') ? 'high' : 'normal'
 
   return (
     <div className="page">
@@ -116,21 +91,38 @@ export default function DashboardPage() {
         ) : (
           /* --- MODO: DASHBOARD ACTIVO --- */
           <>
-            <section id="dashboard-hero" className="saldo-hero">
+            <section id="dashboard-hero" className={`saldo-hero ${isGlobalOver ? 'saldo-hero--over' : ''}`}>
               <div className="saldo-hero__top">
-                <span className="saldo-hero__label">Saldo disponible total</span>
+                <span className="saldo-hero__label">
+                  {isGlobalOver ? '🔔 EXCESO DE PRESUPUESTO' : 'Saldo disponible total'}
+                </span>
                 <div className="saldo-hero__main">
                   <span className="saldo-hero__symbol">{getCurrencySymbol(mainCurrency)}</span>
-                  <span className="saldo-hero__value">{(mainTotal / 1000).toFixed(1)}k</span>
+                  <span className="saldo-hero__value">
+                    {totalAvailableRemaining < 1000 && totalAvailableRemaining > -1000 
+                      ? Math.round(totalAvailableRemaining) 
+                      : (totalAvailableRemaining / 1000).toFixed(1) + 'k'}
+                  </span>
                 </div>
               </div>
+
               <div className="saldo-hero__footer">
-                <div className="progress-track" style={{ height: 6 }}>
-                  <div className="progress-fill" style={{ width: '0%', background: 'white' }} />
+                <div className="progress-track" style={{ height: 8, background: 'rgba(255,255,255,0.2)' }}>
+                  <div 
+                    className="progress-fill" 
+                    style={{ 
+                      width: `${Math.min(globalPct, 100)}%`, 
+                      background: isGlobalOver ? '#fff' : globalPct > 85 ? '#ff4d4d' : '#fff' 
+                    }} 
+                  />
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
-                  <span className="saldo-hero__meta">Empezá a registrar gastos</span>
-                  <span className="saldo-hero__meta">0% del presupuesto</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
+                  <span className="saldo-hero__meta">
+                    {overallBurnRate === 'high' ? '⚠️ Gasto veloz' : 'Proyección estable'}
+                  </span>
+                  <span className="saldo-hero__meta" style={{ fontWeight: 800 }}>
+                    {globalPct}% consumido
+                  </span>
                 </div>
               </div>
             </section>
@@ -144,29 +136,36 @@ export default function DashboardPage() {
               <div className="groups-list">
                 {groups.map(group => {
                   const palette = getPaletteById(group.palette)
+                  
                   return (
                     <Link
                       key={group.id}
                       href={`/groups/${group.id}`}
-                      id={`card-group-${group.id}`}
-                      className="group-card-new"
+                      className="group-card-mof"
                       data-theme={group.palette}
                     >
-                      <div className="gc-head">
-                        <span className="gc-emoji">{group.emoji}</span>
-                        <div className="gc-info">
-                          <span className="gc-name">{group.name}</span>
-                          <span className="gc-member-count">{group.type}</span>
+                      <div className="gc-mof-body">
+                        <div className="gc-mof-icon" style={{ background: `${palette.color}15`, color: palette.color }}>
+                          {group.emoji}
                         </div>
-                        <div className="gc-available-box" style={{ borderColor: palette.color }}>
-                          <span className="gc-available-label">Disponible</span>
-                          <span className="gc-available-val">{formatAmount(group.myAvailable, group.currency)}</span>
+                        <div className="gc-mof-main">
+                          <h3 className="gc-mof-name">{group.name}</h3>
+                          <p className="gc-mof-status">
+                            {group.burnRate === 'critical' ? '🔥 Crítico' : group.burnRate === 'high' ? '⚡ Veloz' : '✅ Estable'}
+                          </p>
+                        </div>
+                        <div className="gc-mof-amount" style={{ color: group.isOverBudget ? 'var(--color-danger)' : 'inherit' }}>
+                          <span className="gc-mof-label">Quedan</span>
+                          <span className="gc-mof-val">{formatAmount(group.groupAvailable, group.currency)}</span>
                         </div>
                       </div>
-                      <div className="progress-track">
+                      <div className="progress-track" style={{ height: 4 }}>
                         <div 
-                          className={`progress-fill ${group.pct >= 90 ? 'progress-fill--danger' : group.pct >= 70 ? 'progress-fill--warning' : ''}`}
-                          style={{ width: `${Math.min(group.pct, 100)}%`, background: group.pct < 70 ? palette.color : undefined }}
+                          className="progress-fill"
+                          style={{ 
+                            width: `${Math.min(group.pct, 100)}%`, 
+                            background: group.isOverBudget ? 'var(--color-danger)' : group.pct > 80 ? 'var(--color-warning)' : palette.color 
+                          }}
                         />
                       </div>
                     </Link>
@@ -197,23 +196,37 @@ export default function DashboardPage() {
           background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-600) 100%);
           color: white; border-radius: var(--radius-2xl); padding: 24px; margin-bottom: 24px;
           box-shadow: 0 12px 24px -8px var(--color-accent-dim); position: relative; overflow: hidden;
+          transition: all 0.5s ease;
         }
-        .saldo-hero__label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; opacity: 0.8; }
+        .saldo-hero--over {
+          background: linear-gradient(135deg, #ff4d4d 0%, #cc0000 100%);
+          box-shadow: 0 12px 24px -8px rgba(255, 77, 77, 0.4);
+          animation: pulse-border 2s infinite;
+        }
+        @keyframes pulse-border {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.02); }
+          100% { transform: scale(1); }
+        }
+        .saldo-hero__label { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; opacity: 0.9; letter-spacing: 0.05em; }
         .saldo-hero__main { display: flex; align-items: baseline; gap: 8px; margin: 8px 0 16px; }
-        .saldo-hero__value { font-size: 3.5rem; font-weight: 900; letter-spacing: -0.05em; }
-        .saldo-hero__meta { font-size: 0.7rem; font-weight: 600; opacity: 0.9; }
+        .saldo-hero__value { font-size: 3.8rem; font-weight: 900; letter-spacing: -0.05em; }
+        .saldo-hero__meta { font-size: 0.75rem; font-weight: 600; opacity: 0.9; }
 
-        .group-card-new {
+        .group-card-mof {
           display: block; background: var(--color-surface); border: 1px solid var(--color-border-2);
           border-radius: var(--radius-xl); padding: 16px; text-decoration: none; margin-bottom: 12px;
+          transition: transform 0.2s ease, border-color 0.2s ease;
         }
-        .gc-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-        .gc-emoji { font-size: 1.5rem; }
-        .gc-info { flex: 1; min-width: 0; }
-        .gc-name { display: block; font-size: var(--text-base); font-weight: 700; color: var(--color-text); }
-        .gc-available-box { text-align: right; border-left: 1px solid var(--color-border-2); padding-left: 12px; }
-        .gc-available-label { display: block; font-size: 0.6rem; color: var(--color-text-3); text-transform: uppercase; }
-        .gc-available-val { font-size: var(--text-sm); font-weight: 800; }
+        .group-card-mof:active { transform: scale(0.98); }
+        .gc-mof-body { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+        .gc-mof-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justifyContent: center; font-size: 1.5rem; }
+        .gc-mof-main { flex: 1; min-width: 0; }
+        .gc-mof-name { font-size: 1rem; font-weight: 700; color: var(--color-text); margin: 0; }
+        .gc-mof-status { font-size: 0.7rem; color: var(--color-text-3); margin: 2px 0 0; font-weight: 600; }
+        .gc-mof-amount { text-align: right; }
+        .gc-mof-label { display: block; font-size: 0.6rem; color: var(--color-text-3); text-transform: uppercase; font-weight: 700; }
+        .gc-mof-val { font-size: 0.95rem; font-weight: 800; }
 
         .auth-divider { display: flex; align-items: center; gap: 12px; margin: 12px 0; color: var(--color-text-3); font-size: 10px; text-transform: uppercase; }
         .auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--color-border-2); }

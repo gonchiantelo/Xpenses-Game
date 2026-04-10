@@ -5,47 +5,55 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
-import { formatAmount, getPaletteById, getCategoryById } from '@/lib/mockData'
+import { formatAmount, getPaletteById, getCategoryById, CATEGORIES } from '@/lib/mockData'
 import BottomNav from '@/components/BottomNav'
 
 type Tab = 'gastos' | 'balance' | 'stats'
+
+import { useXpenses } from '@/hooks/useXpenses'
 
 export default function GroupDetailPage() {
   const router = useRouter()
   const params = useParams()
   const { user } = useAuth()
+  const { groups, loading, error, refresh } = useXpenses()
   const groupId = params.groupId as string
 
-  const [group, setGroup] = useState<any>(null)
-  const [expenses, setExpenses] = useState<any[]>([])
-  const [members, setMembers] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<Tab>('gastos')
   const [paidFilter, setPaidFilter] = useState<'todos' | 'pendientes'>('todos')
+  const [showInviteModal, setShowInviteModal] = useState(false)
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviting, setInviting] = useState(false)
 
-  useEffect(() => {
-    if (!groupId || !user) return
+  const group = groups.find(g => g.id === groupId)
 
-    async function fetchData() {
-      const { data: gData } = await supabase.from('groups').select('*').eq('id', groupId).single()
-      if (gData) setGroup(gData)
-
-      const { data: mData } = await supabase.from('group_members')
-        .select(`*, profiles(first_name, last_name, avatar_url)`)
-        .eq('group_id', groupId)
-      if (mData) setMembers(mData)
-
-      const { data: eData } = await supabase.from('expenses')
-        .select('*')
-        .eq('group_id', groupId)
-        .order('date', { ascending: false })
-      if (eData) setExpenses(eData || [])
-
-      setLoading(false)
+  async function sendInvite() {
+    if (!inviteEmail || !group || !user) return
+    setInviting(true)
+    try {
+      const resp = await fetch('/api/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: inviteEmail,
+          groupName: group.name,
+          inviteCode: (group as any).invite_code || 'CODE',
+          inviterName: user.user_metadata?.first_name || 'Un amigo'
+        })
+      })
+      if (resp.ok) {
+        alert('¡Invitación enviada con éxito!')
+        setShowInviteModal(false)
+        setInviteEmail('')
+      } else {
+        alert('Error al enviar invitación. Verifica tu RESEND_API_KEY.')
+      }
+    } catch (err) {
+      alert('Error de conexión al enviar invitación.')
+    } finally {
+      setInviting(false)
     }
-
-    fetchData()
-  }, [groupId, user])
+  }
 
   if (loading) return <div className="page"><div className="spinner" /></div>
   
@@ -55,65 +63,15 @@ export default function GroupDetailPage() {
 
   const palette = getPaletteById(group.palette || 'violet')
   const currentUserId = user.id
-  const myMember = members.find(m => m.user_id === currentUserId)
-
-  // MOTOR FINANCIERO: Cálculo de balances y deudas
-  const totalSpent = expenses.reduce((s, e) => s + (e.amount || 0), 0)
-  const sharePerPerson = members.length > 0 ? totalSpent / members.length : 0
-  
-  const mySpent = expenses
-    .filter(e => e.paid_by_id === currentUserId)
-    .reduce((s, e) => s + (e.amount || 0), 0)
-
-  const pct = myMember ? Math.round((mySpent / (myMember.budget || 1)) * 100) : 0
-
-  // 1. Calcular cuánto puso cada uno
-  const memberContributions = members.map(m => {
-    const paidByThisMember = expenses
-      .filter(e => e.paid_by_id === m.user_id)
-      .reduce((s, e) => s + (e.amount || 0), 0)
-    
-    return {
-      userId: m.user_id,
-      name: m.profiles?.first_name || 'Amigo',
-      paid: paidByThisMember,
-      balance: paidByThisMember - sharePerPerson
-    }
-  })
-
-  // 2. Calcular liquidaciones (Quién debe a quién)
-  const debtors = memberContributions.filter(m => m.balance < -0.01).sort((a, b) => a.balance - b.balance)
-  const creditors = memberContributions.filter(m => m.balance > 0.01).sort((a, b) => b.balance - a.balance)
-  
-  const settlements: any[] = []
-  const tempDebtors = JSON.parse(JSON.stringify(debtors))
-  const tempCreditors = JSON.parse(JSON.stringify(creditors))
-
-  let dIdx = 0
-  let cIdx = 0
-
-  while (dIdx < tempDebtors.length && cIdx < tempCreditors.length) {
-    const d = tempDebtors[dIdx]
-    const c = tempCreditors[cIdx]
-    const amount = Math.min(Math.abs(d.balance), c.balance)
-    
-    settlements.push({
-      from: d.name,
-      to: c.name,
-      amount: amount
-    })
-
-    tempDebtors[dIdx].balance += amount
-    tempCreditors[cIdx].balance -= amount
-
-    if (Math.abs(tempDebtors[dIdx].balance) < 0.01) dIdx++
-    if (Math.abs(tempCreditors[cIdx].balance) < 0.01) cIdx++
-  }
-
-  const totalGroupSpent = totalSpent
+  const { 
+    members, expenses, memberContributions, settlements, 
+    groupTotalBudget, groupTotalSpent, groupAvailable, 
+    isOverBudget, burnRate, daysRemaining, categoryBreakdown,
+    pct 
+  } = group as any
 
   const filteredExpenses = paidFilter === 'pendientes'
-    ? expenses.filter(e => e.paid_by_id !== currentUserId)
+    ? expenses.filter((e: any) => e.paid_by_id !== currentUserId)
     : expenses
 
   return (
@@ -125,47 +83,71 @@ export default function GroupDetailPage() {
           <h1 className="page-header__title" style={{ color: palette.color }}>{group.name}</h1>
         </div>
         <div style={{ display: 'flex', gap: 4 }}>
-          <button id="btn-quick-invite" className="btn btn--icon btn--ghost" title="Invitar amigos" onClick={() => {}}>➕</button>
+          <button id="btn-quick-invite" className="btn btn--icon btn--ghost" title="Invitar amigos" onClick={() => setShowInviteModal(true)}>➕</button>
           <Link href={`/groups/${groupId}/settings`} id="btn-group-settings" className="btn btn--icon btn--ghost" title="Configuración">
             ⚙️
           </Link>
         </div>
       </header>
 
-      {myMember && (
-        <div className="budget-hero">
+      {showInviteModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div style={{ background: 'var(--color-surface)', borderRadius: 24, padding: 24, width: '100%', maxWidth: 400, border: `1px solid ${palette.color}40` }}>
+            <h3 style={{ marginBottom: 16 }}>Invitar a un amigo</h3>
+            <p style={{ fontSize: '0.8rem', color: 'var(--color-text-3)', marginBottom: 20 }}>Le enviaremos un correo con el código de invitación al grupo.</p>
+            <input 
+              className="input" 
+              placeholder="Email de tu amigo..." 
+              value={inviteEmail}
+              onChange={e => setInviteEmail(e.target.value)}
+              style={{ marginBottom: 20 }}
+            />
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button className="btn btn--ghost" style={{ flex: 1 }} onClick={() => setShowInviteModal(false)}>Cancelar</button>
+              <button className="btn btn--primary" style={{ flex: 1, background: palette.color }} onClick={sendInvite} disabled={inviting || !inviteEmail}>
+                {inviting ? 'Enviando...' : 'Enviar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {groupAvailable !== undefined && (
+        <div className={`budget-hero ${isOverBudget ? 'budget-hero--over' : ''}`}>
           <div className="bhs-row">
             <div className="bhs-item">
-              <span className="bhs-label">Total Gasto</span>
-              <span className="bhs-value">{formatAmount(totalSpent, group.currency)}</span>
-            </div>
-            <div className="bhs-div" />
-            <div className="bhs-item">
-              <span className="bhs-label">Tu Saldo</span>
-              <span className="bhs-value" style={{ 
-                color: (memberContributions.find(m => m.userId === currentUserId)?.balance || 0) >= 0 
-                  ? 'var(--color-success)' 
-                  : 'var(--color-danger)' 
-              }}>
-                {formatAmount(memberContributions.find(m => m.userId === currentUserId)?.balance || 0, group.currency)}
-              </span>
-            </div>
-            <div className="bhs-div" />
-            <div className="bhs-item">
               <span className="bhs-label">Presupuesto</span>
-              <span className="bhs-value">
-                {formatAmount(myMember.budget, group.currency)}
+              <span className="bhs-value">{formatAmount(groupTotalBudget, group.currency)}</span>
+            </div>
+            <div className="bhs-div" />
+            <div className="bhs-item bhs-item--main">
+              <span className="bhs-label">{isOverBudget ? 'Excedido' : 'Disponible'}</span>
+              <span className="bhs-value" style={{ color: isOverBudget ? 'var(--color-danger)' : 'var(--color-success)' }}>
+                {formatAmount(groupAvailable, group.currency)}
               </span>
+            </div>
+            <div className="bhs-div" />
+            <div className="bhs-item">
+              <span className="bhs-label">Gasto Total</span>
+              <span className="bhs-value">{formatAmount(groupTotalSpent, group.currency)}</span>
             </div>
           </div>
           <div style={{ padding: '0 16px 8px' }}>
-            <div className="progress-track" style={{ height: 6 }}>
-              <div className={`progress-fill ${pct >= 90 ? 'progress-fill--danger' : pct >= 70 ? 'progress-fill--warning' : ''}`}
-                style={{ width: `${Math.min(pct, 100)}%`, background: pct < 70 ? palette.color : undefined }} />
+            <div className="progress-track" style={{ height: 8 }}>
+              <div className={`progress-fill ${isOverBudget ? 'progress-fill--danger' : pct >= 85 ? 'progress-fill--warning' : ''}`}
+                style={{ width: `${Math.min(pct, 100)}%`, background: !isOverBudget && pct < 85 ? palette.color : undefined }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
+              <span style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--color-text-3)' }}>
+                {burnRate === 'high' ? '⚠️ Gasto muy rápido' : burnRate === 'critical' ? '🚨 Presupuesto agotado' : '✅ Consumo estable'}
+              </span>
+              <span style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--color-text-3)' }}>
+                {pct}% consumido
+              </span>
             </div>
           </div>
           <div className="members-strip">
-            {members.map(m => (
+            {members.map((m: any) => (
               <div key={m.user_id} className="member-stat">
                 <div className="member-stat-ava" style={{ background: 'var(--color-surface-3)', border: m.user_id === currentUserId ? `2px solid ${palette.color}` : '2px solid transparent' }}>
                   {m.profiles?.first_name?.substring(0, 1).toUpperCase() || '👤'}
@@ -195,98 +177,123 @@ export default function GroupDetailPage() {
               <button className={`filter-btn ${paidFilter === 'todos' ? 'active' : ''}`} onClick={() => setPaidFilter('todos')}>Todos ({expenses.length})</button>
               <button className={`filter-btn ${paidFilter === 'pendientes' ? 'active' : ''}`} onClick={() => setPaidFilter('pendientes')}>De otros</button>
             </div>
-            {filteredExpenses.map(expense => {
-              const cat = getCategoryById(expense.category_id || '')
-              const isPaidByMe = expense.paid_by_id === currentUserId
-              const payerName = members.find(m => m.user_id === expense.paid_by_id)?.profiles?.first_name || 'Alguien'
-              
-              return (
-                <div key={expense.id} className="expense-item">
-                  <div className="expense-cat-icon" style={{ background: `${cat?.color}22`, color: cat?.color }}>{cat?.icon || '💰'}</div>
-                  <div className="expense-info">
-                    <div className="expense-top">
-                      <span className="expense-desc">{expense.description}</span>
-                      <span className="expense-total">{formatAmount(expense.amount, group.currency)}</span>
-                    </div>
-                    <div className="expense-bottom">
-                      <span className="expense-meta">{new Date(expense.date).toLocaleDateString()}</span>
-                      <span className={`expense-split ${isPaidByMe ? 'paid' : 'pending'}`}>
-                        {isPaidByMe ? 'Pagaste tú' : `Pagó ${payerName}`}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-            {filteredExpenses.length === 0 && (
-              <div className="empty-state">
-                <span style={{ fontSize: '2.5rem' }}>🎉</span>
-                <p style={{ color: 'var(--color-text-2)', fontSize: 'var(--text-sm)' }}>No hay gastos registrados</p>
-              </div>
-            )}
-          </>
-        )}
-
-        {activeTab === 'balance' && (
-          <>
-            <div className="balance-grid" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {memberContributions.map(mc => (
-                <div key={mc.userId} className="balance-card" style={{ padding: '15px', marginBottom: 0 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontWeight: 700 }}>{mc.userId === currentUserId ? 'Tú' : mc.name}</div>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--color-text-3)' }}>Puso {formatAmount(mc.paid, group.currency)}</div>
-                    </div>
-                    <div style={{ 
-                      textAlign: 'right', 
-                      color: mc.balance >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
-                      fontWeight: 800
-                    }}>
-                      {mc.balance >= 0 ? '+' : ''}{formatAmount(mc.balance, group.currency)}
+              {filteredExpenses.map((expense: any) => {
+                const cat = getCategoryById(expense.category_id || '')
+                const isPaidByMe = expense.paid_by_id === currentUserId
+                const payerName = members.find((m: any) => m.user_id === expense.paid_by_id)?.profiles?.first_name || 'Alguien'
+                
+                return (
+                  <div key={expense.id} className="expense-item">
+                    <div className="expense-cat-icon" style={{ background: `${cat?.color}22`, color: cat?.color }}>{cat?.icon || '💰'}</div>
+                    <div className="expense-info">
+                      <div className="expense-top">
+                        <span className="expense-desc">{expense.description}</span>
+                        <span className="expense-total">{formatAmount(expense.amount, group.currency)}</span>
+                      </div>
+                      <div className="expense-bottom">
+                        <span className="expense-meta">{new Date(expense.date).toLocaleDateString()}</span>
+                        <span className={`expense-split ${isPaidByMe ? 'paid' : 'pending'}`}>
+                          {isPaidByMe ? 'Pagaste tú' : `Pagó ${payerName}`}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ marginTop: 24 }}>
-              <h4 style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--color-text-3)', marginBottom: 12 }}>Liquidaciones</h4>
-              {settlements.map((s, i) => (
-                <div key={i} className="settlement-item" style={{ 
-                  background: 'var(--color-surface-2)', 
-                  padding: '12px', 
-                  borderRadius: '12px',
-                  marginBottom: 8,
-                  fontSize: 'var(--text-sm)',
-                  display: 'flex',
-                  justifyContent: 'space-between'
-                }}>
-                  <span><b>{s.from}</b> le debe a <b>{s.to}</b></span>
-                  <span style={{ fontWeight: 700, color: 'var(--color-accent)' }}>{formatAmount(s.amount, group.currency)}</span>
-                </div>
-              ))}
-              {settlements.length === 0 && (
+                )
+              })}
+              {filteredExpenses.length === 0 && (
                 <div className="empty-state">
-                  <span style={{ fontSize: '2.5rem' }}>🤝</span>
-                  <p style={{ color: 'var(--color-text-2)', fontSize: 'var(--text-sm)' }}>¡Todo está saldado!</p>
+                  <span style={{ fontSize: '2.5rem' }}>🎉</span>
+                  <p style={{ color: 'var(--color-text-2)', fontSize: 'var(--text-sm)' }}>No hay gastos registrados</p>
                 </div>
               )}
-            </div>
-          </>
-        )}
-
+            </>
+          )}
+  
+          {activeTab === 'balance' && (
+            <>
+              <div className="balance-grid" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {memberContributions.map((mc: any) => (
+                  <div key={mc.userId} className="balance-card" style={{ padding: '15px', marginBottom: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <div style={{ fontWeight: 700 }}>{mc.userId === currentUserId ? 'Tú' : mc.name}</div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--color-text-3)' }}>Puso {formatAmount(mc.paid, group.currency)}</div>
+                      </div>
+                      <div style={{ 
+                        textAlign: 'right', 
+                        color: mc.balance >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
+                        fontWeight: 800
+                      }}>
+                        {mc.balance >= 0 ? '+' : ''}{formatAmount(mc.balance, group.currency)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+  
+              <div style={{ marginTop: 24 }}>
+                <h4 style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--color-text-3)', marginBottom: 12 }}>Liquidaciones</h4>
+                {settlements.map((s: any, i: number) => (
+                  <div key={i} className="settlement-item" style={{ 
+                    background: 'var(--color-surface-2)', 
+                    padding: '12px', 
+                    borderRadius: '12px',
+                    marginBottom: 8,
+                    fontSize: 'var(--text-sm)',
+                    display: 'flex',
+                    justifyContent: 'space-between'
+                  }}>
+                    <span><b>{s.from}</b> le debe a <b>{s.to}</b></span>
+                    <span style={{ fontWeight: 700, color: 'var(--color-accent)' }}>{formatAmount(s.amount, group.currency)}</span>
+                  </div>
+                ))}
+                {settlements.length === 0 && (
+                  <div className="empty-state">
+                    <span style={{ fontSize: '2.5rem' }}>🤝</span>
+                    <p style={{ color: 'var(--color-text-2)', fontSize: 'var(--text-sm)' }}>¡Todo está saldado!</p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+  
         {activeTab === 'stats' && (
           <div className="stats-container">
-            <div className="pie-wrap">
-              <div className="pie-visual">
-                <div className="pie-ring" style={{ background: palette.color }} />
-                <div className="pie-center">
-                  <span style={{ fontSize: '0.6rem', color: 'var(--color-text-3)' }}>Total</span>
-                  <span style={{ fontSize: 'var(--text-base)', fontWeight: 800 }}>{formatAmount(totalGroupSpent, group.currency)}</span>
+            <div className="pie-wrap" style={{ flexDirection: 'column', gap: 24 }}>
+              <div style={{ display: 'flex', gap: 20, alignItems: 'center', width: '100%' }}>
+                <div className="pie-visual">
+                  <div className="pie-ring" style={{ background: palette.color }} />
+                  <div className="pie-center">
+                    <span style={{ fontSize: '0.6rem', color: 'var(--color-text-3)' }}>Total</span>
+                    <span style={{ fontSize: 'var(--text-base)', fontWeight: 800 }}>{formatAmount(groupTotalSpent, group.currency)}</span>
+                  </div>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <h4 style={{ margin: 0, fontSize: 'var(--text-lg)' }}>Distribución</h4>
+                  <p style={{ margin: '4px 0 0', fontSize: 'var(--text-xs)', color: 'var(--color-text-3)' }}>Gasto por categorías</p>
                 </div>
               </div>
-              <div className="pie-legend">
-                <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-3)' }}>Próximamente verás aquí el desglose por categorías reales.</p>
+
+              <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {categoryBreakdown.map((ct: any) => {
+                  const cat = getCategoryById(ct.id)
+                  return (
+                    <div key={ct.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{ width: 36, height: 36, borderRadius: 10, background: `${cat?.color}22`, color: cat?.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem' }}>
+                        {cat?.icon || '💰'}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 4 }}>
+                          <span>{cat?.name || 'Varios'}</span>
+                          <span>{formatAmount(ct.amount, group.currency)}</span>
+                        </div>
+                        <div className="progress-track" style={{ height: 4 }}>
+                          <div className="progress-fill" style={{ width: `${ct.pct}%`, background: cat?.color }} />
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           </div>

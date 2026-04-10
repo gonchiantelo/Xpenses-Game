@@ -7,52 +7,17 @@ import { useAuth } from '@/hooks/useAuth'
 import { formatAmount, getPaletteById } from '@/lib/mockData'
 import BottomNav from '@/components/BottomNav'
 
+import { useXpenses } from '@/hooks/useXpenses'
+
 export default function GroupsPage() {
   const { user } = useAuth()
-  const [myGroups, setMyGroups] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    if (!user) return
-    const currentUserId = user.id
-
-    async function fetchGroups() {
-      try {
-        const { data, error } = await supabase
-          .from('group_members')
-          .select(`
-            role,
-            groups (
-              id, name, emoji, type, currency, palette,
-              group_members (
-                user_id,
-                profiles (first_name, last_name, avatar_url)
-              )
-            )
-          `)
-          .eq('user_id', currentUserId)
-
-        if (error) {
-          console.error('Error de Supabase:', error)
-        } else if (data) {
-          // Filtramos nulos por si el RLS bloquea el acceso al objeto group
-          const groups = data.map(d => d.groups).filter(g => g !== null)
-          setMyGroups(groups)
-        }
-      } catch (err) {
-        console.error('Error fatal al cargar grupos:', err)
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    fetchGroups()
-  }, [user])
+  const { groups, loading, error } = useXpenses()
 
   if (loading) return <div className="page" style={{display:'flex',justifyContent:'center',padding:'50px'}}><div className="spinner" /></div>
   if (!user) return null
 
   const userId = user.id
+  const myGroups = groups
 
   return (
     <div className="page">
@@ -94,7 +59,7 @@ export default function GroupsPage() {
                 </div>
 
                 <div className="gfc-members">
-                  {group.group_members?.map((m: any) => (
+                  {group.members?.map((m: any) => (
                     <div key={m.user_id} className="member-pill">
                       <div className="member-ava" style={{ background: 'var(--color-surface-3)' }}>
                         {m.profiles?.first_name?.substring(0, 1) || '👤'}
