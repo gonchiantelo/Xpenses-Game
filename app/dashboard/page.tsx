@@ -1,239 +1,199 @@
-'use client'
+// Dashboard — SERVER COMPONENT (sin 'use client')
+// Obtiene datos de Supabase en el servidor via SSR (Vercel Edge)
+// Calcula balances netos y settlements ANTES de renderizar
 
-import { useState, useEffect } from 'react'
+import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/hooks/useAuth'
-import { formatAmount, getCurrencySymbol, getPaletteById } from '@/lib/mockData'
-import BottomNav from '@/components/BottomNav'
+import { createClient } from '@/lib/supabase/server'
+import { calculateNetBalances, getUserGlobalBalance } from '@/lib/finance/balances'
+import { calculateSettlements } from '@/lib/finance/settlements'
+import { filterByCurrentMonth, calculateBurnRate, getDaysRemainingInMonth } from '@/lib/finance/projections'
+import NetBalanceCard from '@/components/dashboard/NetBalanceCard'
+import GroupCardList from '@/components/dashboard/GroupCardList'
+import FABAddExpense from '@/components/dashboard/FABAddExpense'
+import ThemeToggle from '@/components/ui/ThemeToggle'
+import type { GroupEnriched, Expense, GroupMember, Profile } from '@/lib/types/database'
 
-import { useXpenses } from '@/hooks/useXpenses'
+export const dynamic = 'force-dynamic'
 
-export default function DashboardPage() {
-  const router = useRouter()
-  const { user, loading: authLoading } = useAuth()
-  const { groups, loading: groupsLoading, error } = useXpenses()
+export default async function DashboardPage() {
+  const supabase = await createClient()
 
-  if (authLoading || groupsLoading) {
-    return (
-      <div className="page" style={{ justifyContent: 'center', alignItems: 'center' }}>
-        <span className="spinner" />
-      </div>
+  // 1. Verificar sesión
+  const { data: { user }, error: authError } = await supabase.auth.getUser()
+  if (authError || !user) redirect('/login')
+
+  // 2. Perfil del usuario
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('first_name, last_name, theme_preference')
+    .eq('id', user.id)
+    .single()
+
+  // Redirigir a onboarding de tema si nunca eligió preferencia
+  if (profile && profile.theme_preference === null) {
+    redirect('/onboarding/theme')
+  }
+
+  // 3. Grupos del usuario
+  const { data: memberEntries, error: memberError } = await supabase
+    .from('group_members')
+    .select(`
+      budget, role,
+      groups (
+        id, name, emoji, type, currency, palette, owner_id, invite_code, created_at
+      )
+    `)
+    .eq('user_id', user.id)
+
+  if (memberError) console.error('[Dashboard] Error fetching groups:', memberError)
+
+  const enrichedGroups: GroupEnriched[] = []
+
+  if (memberEntries && memberEntries.length > 0) {
+    const { dayOfMonth, totalDays } = getDaysRemainingInMonth()
+
+    await Promise.all(
+      memberEntries.map(async (entry: any) => {
+        const group = entry.groups
+        if (!group) return
+
+        const [expRes, memRes] = await Promise.all([
+          supabase.from('expenses').select('*').eq('group_id', group.id).order('date', { ascending: false }),
+          supabase.from('group_members')
+            .select('user_id, budget, role, profiles(first_name, last_name, avatar_url)')
+            .eq('group_id', group.id),
+        ])
+
+        const allExpenses: Expense[] = expRes.data ?? []
+        // Tipado defensivo para Supabase profiles
+        const members: any[] = (memRes.data ?? []).map((m: any) => ({
+          ...m,
+          profiles: Array.isArray(m.profiles) ? m.profiles[0] : m.profiles
+        }))
+
+        // FILTRO DE CIERRE: Solo tomamos los gastos NO liquidados para el balance actual
+        const activeExpenses = allExpenses.filter(e => !e.is_settled)
+
+        // Motor financiero — todo en servidor ──────────────
+        const groupTotalBudget = members.reduce((s, m) => s + Number(m.budget || 0), 0)
+        const groupTotalSpent  = activeExpenses.reduce((s, e) => s + Number(e.amount || 0), 0)
+        const groupAvailable   = groupTotalBudget - groupTotalSpent
+        const isOverBudget     = groupAvailable < 0
+        const pct              = groupTotalBudget > 0
+          ? Math.round((groupTotalSpent / groupTotalBudget) * 100)
+          : groupTotalSpent > 0 ? 100 : 0
+
+        const burnRate    = calculateBurnRate(groupTotalSpent, groupTotalBudget, dayOfMonth, totalDays)
+        const netBalances = calculateNetBalances(members, activeExpenses)
+        const settlements = calculateSettlements(netBalances)
+        const myBalance   = netBalances.find(b => b.userId === user.id)
+        const myBudget    = Number(entry.budget) || 0
+        const mySpent     = activeExpenses
+          .filter(e => e.paid_by_id === user.id)
+          .reduce((s, e) => s + Number(e.amount), 0)
+
+        enrichedGroups.push({
+          ...group,
+          role: entry.role,
+          members,
+          expenses: allExpenses, // Mantenemos todos para el historial si fuera necesario
+          groupTotalBudget,
+          groupTotalSpent,
+          groupAvailable,
+          isOverBudget,
+          burnRate,
+          daysRemaining: getDaysRemainingInMonth().daysRemaining,
+          pct,
+          netBalances,
+          settlements,
+          myBudget,
+          mySpent,
+          myNetBalance: myBalance?.netBalance ?? 0,
+        } as GroupEnriched)
+      })
     )
   }
 
-  const mainCurrency = 'UYU'
-  
-  // LÓGICA MOF: Totales agregados de la Caja Única
-  const totalBudget = groups.reduce((acc, g) => acc + (g.currency === mainCurrency ? g.groupTotalBudget : 0), 0)
-  const totalSpent = groups.reduce((acc, g) => acc + (g.currency === mainCurrency ? g.groupTotalSpent : 0), 0)
-  const totalAvailableRemaining = totalBudget - totalSpent
-  const globalPct = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0
-  
-  const isGlobalOver = totalAvailableRemaining < 0
-  const overallBurnRate = groups.some(g => g.burnRate === 'high' || g.burnRate === 'critical') ? 'high' : 'normal'
+  // 6. Balance neto global
+  const globalBalance = getUserGlobalBalance(user.id, enrichedGroups)
+  const mainCurrency  = enrichedGroups[0]?.currency ?? 'UYU'
+  const firstName     = profile?.first_name ?? user.user_metadata?.first_name ?? 'jugador'
 
   return (
-    <div className="page">
-      <header className="page-header" style={{ paddingBottom: 0, borderBottom: 'none' }}>
+    <>
+      {/* Header */}
+      <header className="flex items-center justify-between mb-6">
         <div>
-          <p className="page-header__subtitle">Hola, {user?.user_metadata?.first_name || 'jugador'} 👋</p>
+          <h1 className="text-xl font-extrabold text-primary tracking-tight">Dashboard</h1>
+          <p className="text-xs text-tertiary mt-0.5">
+            {new Date().toLocaleDateString('es-UY', { weekday: 'long', day: 'numeric', month: 'long' })}
+          </p>
         </div>
-        <Link href="/notifications" id="btn-notif-header">
-          <div style={{ position: 'relative' }}>
-            <span style={{ fontSize: '1.25rem' }}>🔔</span>
-          </div>
-        </Link>
+        <div className="flex items-center gap-3 lg:hidden">
+          <Link href="/notifications" id="btn-notif-header"
+            className="relative p-2 rounded-xl bg-surface-2 text-secondary hover:text-primary transition-colors"
+            aria-label="Notificaciones">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0" />
+            </svg>
+          </Link>
+          <ThemeToggle />
+        </div>
       </header>
 
-      <div className="page-content" style={{ paddingTop: 0 }}>
-        
-        {groups.length === 0 ? (
-          /* --- MODO: BIENVENIDA (Usuario nuevo) --- */
-          <div className="empty-state">
-            <div className="empty-icon">🎮</div>
-            <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 800, marginBottom: 12 }}>¡Bienvenido al juego!</h2>
-            <p style={{ color: 'var(--color-text-2)', fontSize: 'var(--text-sm)', marginBottom: 32 }}>
-              Aún no eres miembro de ningún grupo. Podés empezar uno nuevo o pedirle a un amigo que te pase su código de invitación.
-            </p>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%' }}>
-              <Link href="/groups/create" className="btn btn--primary btn--full btn--lg">
-                ✨ Crear mi primer grupo
-              </Link>
-              <div className="auth-divider"><span>o</span></div>
-              <div className="input-group">
-                <input className="input" placeholder="Pegá el código de invitación..." style={{ textAlign: 'center' }} />
-                <button className="btn btn--secondary btn--full btn--sm" style={{ marginTop: 8 }}>
-                  Unirme con código
-                </button>
-              </div>
+      {enrichedGroups.length === 0 ? (
+        /* ── MODO BIENVENIDA ─────────────────────────── */
+        <div className="flex flex-col items-center text-center py-12 animate-fade-in">
+          <div className="text-6xl mb-6 animate-float">🎮</div>
+          <h2 className="text-xl font-extrabold text-primary mb-3">
+            ¡Bienvenido al juego, {firstName}!
+          </h2>
+          <p className="text-sm text-secondary mb-8 max-w-xs text-balance">
+            Aún no sos miembro de ningún grupo. Creá uno nuevo o pedile a un amigo su código de invitación.
+          </p>
+          <div className="flex flex-col gap-3 w-full max-w-xs">
+            <Link href="/groups/create"
+              className="flex items-center justify-center gap-2 w-full py-3.5 px-6 rounded-xl text-sm font-bold text-[#000F0A] transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
+              style={{ background: 'linear-gradient(135deg, #00DF81 0%, #2CC295 100%)', boxShadow: '0 4px 20px rgba(0,223,129,0.30)' }}>
+              ✨ Crear mi primer grupo
+            </Link>
+            <div className="flex items-center gap-3 text-xs text-tertiary">
+              <div className="flex-1 h-px" style={{ background: 'var(--border-2)' }} />
+              <span className="uppercase tracking-wider">o</span>
+              <div className="flex-1 h-px" style={{ background: 'var(--border-2)' }} />
             </div>
-
-            <div className="onboarding-cards">
-              <div className="ob-card">
-                <span className="ob-icon">💰</span>
-                <div>
-                  <strong>Dividí gastos</strong>
-                  <p>Repartí cuentas de forma equitativa o manual.</p>
-                </div>
-              </div>
-              <div className="ob-card">
-                <span className="ob-icon">🏆</span>
-                <div>
-                  <strong>Mantené el balance</strong>
-                  <p>Enterate de quién debe a quién al instante.</p>
-                </div>
-              </div>
-            </div>
+            <Link href="/invite"
+              className="flex items-center justify-center w-full py-3 px-6 rounded-xl text-sm font-semibold text-secondary border border-subtle bg-surface hover:border-accent/30 hover:text-primary transition-all duration-150">
+              Unirme con código de invitación
+            </Link>
           </div>
-        ) : (
-          /* --- MODO: DASHBOARD ACTIVO --- */
-          <>
-            <section id="dashboard-hero" className={`saldo-hero ${isGlobalOver ? 'saldo-hero--over' : ''}`}>
-              <div className="saldo-hero__top">
-                <span className="saldo-hero__label">
-                  {isGlobalOver ? '🔔 EXCESO DE PRESUPUESTO' : 'Saldo disponible total'}
-                </span>
-                <div className="saldo-hero__main">
-                  <span className="saldo-hero__symbol">{getCurrencySymbol(mainCurrency)}</span>
-                  <span className="saldo-hero__value">
-                    {totalAvailableRemaining < 1000 && totalAvailableRemaining > -1000 
-                      ? Math.round(totalAvailableRemaining) 
-                      : (totalAvailableRemaining / 1000).toFixed(1) + 'k'}
-                  </span>
+          <div className="flex flex-col gap-3 w-full max-w-xs mt-10">
+            {[
+              { icon: '💰', title: 'Dividí gastos', desc: 'Prorrateo automático y equitativo al instante.' },
+              { icon: '🤝', title: 'Simplificá deudas', desc: 'Algoritmo Greedy que minimiza transferencias.' },
+              { icon: '📊', title: 'Controlá tu presupuesto', desc: 'Proyecciones en tiempo real con alertas.' },
+            ].map(card => (
+              <div key={card.title} className="flex items-start gap-4 p-4 rounded-xl border border-subtle bg-surface text-left">
+                <span className="text-2xl shrink-0">{card.icon}</span>
+                <div>
+                  <p className="text-sm font-bold text-primary">{card.title}</p>
+                  <p className="text-xs text-tertiary mt-0.5">{card.desc}</p>
                 </div>
               </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        /* ── DASHBOARD ACTIVO ────────────────────────── */
+        <div className="flex flex-col gap-6 animate-fade-in">
+          <NetBalanceCard balance={globalBalance} currency={mainCurrency} userName={firstName} />
+          <GroupCardList groups={enrichedGroups} />
+          <div className="h-4 lg:h-0" />
+        </div>
+      )}
 
-              <div className="saldo-hero__footer">
-                <div className="progress-track" style={{ height: 8, background: 'rgba(255,255,255,0.2)' }}>
-                  <div 
-                    className="progress-fill" 
-                    style={{ 
-                      width: `${Math.min(globalPct, 100)}%`, 
-                      background: isGlobalOver ? '#fff' : globalPct > 85 ? '#ff4d4d' : '#fff' 
-                    }} 
-                  />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
-                  <span className="saldo-hero__meta">
-                    {overallBurnRate === 'high' ? '⚠️ Gasto veloz' : 'Proyección estable'}
-                  </span>
-                  <span className="saldo-hero__meta" style={{ fontWeight: 800 }}>
-                    {globalPct}% consumido
-                  </span>
-                </div>
-              </div>
-            </section>
-
-            <section id="section-groups" style={{ marginTop: 8 }}>
-              <div className="section-header">
-                <h2 className="section-title">Tus Grupos ({groups.length})</h2>
-                <Link href="/groups/create" className="btn btn--sm btn--ghost">+ Nuevo</Link>
-              </div>
-
-              <div className="groups-list">
-                {groups.map(group => {
-                  const palette = getPaletteById(group.palette)
-                  
-                  return (
-                    <Link
-                      key={group.id}
-                      href={`/groups/${group.id}`}
-                      className="group-card-mof"
-                      data-theme={group.palette}
-                    >
-                      <div className="gc-mof-body">
-                        <div className="gc-mof-icon" style={{ background: `${palette.color}15`, color: palette.color }}>
-                          {group.emoji}
-                        </div>
-                        <div className="gc-mof-main">
-                          <h3 className="gc-mof-name">{group.name}</h3>
-                          <p className="gc-mof-status">
-                            {group.burnRate === 'critical' ? '🔥 Crítico' : group.burnRate === 'high' ? '⚡ Veloz' : '✅ Estable'}
-                          </p>
-                        </div>
-                        <div className="gc-mof-amount" style={{ color: group.isOverBudget ? 'var(--color-danger)' : 'inherit' }}>
-                          <span className="gc-mof-label">Quedan</span>
-                          <span className="gc-mof-val">{formatAmount(group.groupAvailable, group.currency)}</span>
-                        </div>
-                      </div>
-                      <div className="progress-track" style={{ height: 4 }}>
-                        <div 
-                          className="progress-fill"
-                          style={{ 
-                            width: `${Math.min(group.pct, 100)}%`, 
-                            background: group.isOverBudget ? 'var(--color-danger)' : group.pct > 80 ? 'var(--color-warning)' : palette.color 
-                          }}
-                        />
-                      </div>
-                    </Link>
-                  )
-                })}
-              </div>
-            </section>
-          </>
-        )}
-        
-        <div style={{ height: 16 }} />
-      </div>
-
-      <button id="fab-add-expense" className="fab" onClick={() => router.push('/expenses/add')}>+</button>
-      <BottomNav notifCount={0} />
-
-      <style jsx>{`
-        .empty-state { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 40px 20px; }
-        .empty-icon { font-size: 5rem; margin-bottom: 24px; animation: bounce 2s infinite; }
-        @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
-        .onboarding-cards { display: flex; flex-direction: column; gap: 12px; width: 100%; margin-top: 40px; }
-        .ob-card { display: flex; align-items: center; gap: 16px; padding: 16px; background: var(--color-surface-2); border-radius: var(--radius-xl); text-align: left; }
-        .ob-icon { font-size: 1.5rem; }
-        .ob-card strong { display: block; font-size: var(--text-sm); }
-        .ob-card p { font-size: var(--text-xs); color: var(--color-text-3); margin-top: 2px; }
-
-        .saldo-hero {
-          background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-600) 100%);
-          color: white; border-radius: var(--radius-2xl); padding: 24px; margin-bottom: 24px;
-          box-shadow: 0 12px 24px -8px var(--color-accent-dim); position: relative; overflow: hidden;
-          transition: all 0.5s ease;
-        }
-        .saldo-hero--over {
-          background: linear-gradient(135deg, #ff4d4d 0%, #cc0000 100%);
-          box-shadow: 0 12px 24px -8px rgba(255, 77, 77, 0.4);
-          animation: pulse-border 2s infinite;
-        }
-        @keyframes pulse-border {
-          0% { transform: scale(1); }
-          50% { transform: scale(1.02); }
-          100% { transform: scale(1); }
-        }
-        .saldo-hero__label { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; opacity: 0.9; letter-spacing: 0.05em; }
-        .saldo-hero__main { display: flex; align-items: baseline; gap: 8px; margin: 8px 0 16px; }
-        .saldo-hero__value { font-size: 3.8rem; font-weight: 900; letter-spacing: -0.05em; }
-        .saldo-hero__meta { font-size: 0.75rem; font-weight: 600; opacity: 0.9; }
-
-        .group-card-mof {
-          display: block; background: var(--color-surface); border: 1px solid var(--color-border-2);
-          border-radius: var(--radius-xl); padding: 16px; text-decoration: none; margin-bottom: 12px;
-          transition: transform 0.2s ease, border-color 0.2s ease;
-        }
-        .group-card-mof:active { transform: scale(0.98); }
-        .gc-mof-body { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-        .gc-mof-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justifyContent: center; font-size: 1.5rem; }
-        .gc-mof-main { flex: 1; min-width: 0; }
-        .gc-mof-name { font-size: 1rem; font-weight: 700; color: var(--color-text); margin: 0; }
-        .gc-mof-status { font-size: 0.7rem; color: var(--color-text-3); margin: 2px 0 0; font-weight: 600; }
-        .gc-mof-amount { text-align: right; }
-        .gc-mof-label { display: block; font-size: 0.6rem; color: var(--color-text-3); text-transform: uppercase; font-weight: 700; }
-        .gc-mof-val { font-size: 0.95rem; font-weight: 800; }
-
-        .auth-divider { display: flex; align-items: center; gap: 12px; margin: 12px 0; color: var(--color-text-3); font-size: 10px; text-transform: uppercase; }
-        .auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--color-border-2); }
-        
-        .spinner { width: 30px; height: 30px; border: 3px solid var(--color-surface-3); border-top-color: var(--color-accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-      `}</style>
-    </div>
+      <FABAddExpense />
+    </>
   )
 }

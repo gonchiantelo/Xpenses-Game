@@ -2,34 +2,32 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
-import BottomNav from '@/components/BottomNav'
+
+const TYPE_ICONS: Record<string, string> = {
+  overbudget: '🚨', expense: '💰', invite: '✉️', settlement: '🤝', system: '🔔',
+}
 
 export default function NotificationsPage() {
-  const router = useRouter()
+  const router   = useRouter()
   const { user } = useAuth()
+  const supabase = createClient()
   const [notifications, setNotifications] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading,       setLoading]       = useState(true)
 
   useEffect(() => {
     if (!user) return
-
-    const fetchNotifications = async () => {
-      const { data, error } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
-
-      if (!error) {
-        setNotifications(data || [])
-      }
-      setLoading(false)
-    }
-
-    fetchNotifications()
-  }, [user])
+    supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .then(({ data, error }) => {
+        if (!error) setNotifications(data || [])
+        setLoading(false)
+      })
+  }, [user]) // eslint-disable-line
 
   const markAsRead = async (id: string) => {
     await supabase.from('notifications').update({ is_read: true }).eq('id', id)
@@ -41,75 +39,80 @@ export default function NotificationsPage() {
     setNotifications(prev => prev.filter(n => n.id !== id))
   }
 
+  const unreadCount = notifications.filter(n => !n.is_read).length
+
   return (
-    <div className="page">
-      <header className="page-header">
-        <button className="btn btn--icon btn--ghost" onClick={() => router.back()}>←</button>
-        <div style={{ flex: 1, textAlign: 'center' }}>
-          <h1 className="page-header__title">Alertas</h1>
-          <p className="page-header__subtitle">Historial de movimientos</p>
+    <>
+      {/* Header */}
+      <header className="flex items-center gap-3 mb-6">
+        <button onClick={() => router.back()}
+          className="p-2 rounded-xl bg-surface-2 border border-subtle text-secondary hover:text-primary transition-colors"
+          aria-label="Volver">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M19 12H5M12 5l-7 7 7 7" />
+          </svg>
+        </button>
+        <div>
+          <h1 className="text-xl font-extrabold text-primary tracking-tight">Alertas</h1>
+          <p className="text-xs text-tertiary mt-0.5">
+            {unreadCount > 0 ? `${unreadCount} sin leer` : 'Todo al día'}
+          </p>
         </div>
-        <div style={{ width: 44 }} />
       </header>
 
-      <div className="page-content">
-        {loading ? (
-          <div style={{ textAlign: 'center', paddingTop: 40 }}><span className="spinner" /></div>
-        ) : notifications.length === 0 ? (
-          <div className="empty-state">
-            <span style={{ fontSize: '3rem' }}>🔔</span>
-            <p style={{ marginTop: 16, color: 'var(--color-text-3)' }}>No tienes alertas pendientes</p>
-          </div>
-        ) : (
-          <div className="notif-list">
-            {notifications.map(n => (
-              <div 
-                key={n.id} 
-                className={`notif-card ${n.is_read ? 'read' : 'unread'}`}
-                onClick={() => markAsRead(n.id)}
-              >
-                <div className="notif-icon">
-                  {n.type === 'overbudget' ? '🚨' : n.type === 'expense' ? '💰' : '🔔'}
+      {loading ? (
+        /* Skeleton */
+        <div className="flex flex-col gap-3">
+          {[1, 2, 3].map(i => (
+            <div key={i} className="skeleton h-20 w-full rounded-xl" style={{ opacity: 1 - i * 0.15 }} />
+          ))}
+        </div>
+      ) : notifications.length === 0 ? (
+        /* Empty state */
+        <div className="flex flex-col items-center text-center py-16 animate-fade-in">
+          <div className="text-5xl mb-4">🔔</div>
+          <h3 className="text-base font-bold text-primary mb-1">Sin alertas pendientes</h3>
+          <p className="text-sm text-tertiary">Cuando haya actividad en tus grupos aparecerá aquí.</p>
+        </div>
+      ) : (
+        /* Notification list */
+        <div className="flex flex-col gap-2.5 animate-fade-in">
+          {notifications.map(n => (
+            <div
+              key={n.id}
+              onClick={() => markAsRead(n.id)}
+              className={`
+                flex items-start gap-3 p-4 rounded-xl border bg-surface cursor-pointer
+                transition-all duration-150 hover:border-accent/20
+                ${n.is_read
+                  ? 'border-subtle opacity-70'
+                  : 'border-l-[3px] border-l-accent border-subtle/60'
+                }
+              `}
+            >
+              <span className="text-2xl shrink-0 mt-0.5" aria-hidden="true">
+                {TYPE_ICONS[n.type] ?? '🔔'}
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-sm font-bold text-primary leading-tight">{n.title}</p>
+                  <span className="text-[10px] text-tertiary shrink-0 mt-0.5">
+                    {new Date(n.created_at).toLocaleDateString('es-UY', { day: 'numeric', month: 'short' })}
+                  </span>
                 </div>
-                <div className="notif-main">
-                  <div className="notif-top">
-                    <span className="notif-title">{n.title}</span>
-                    <span className="notif-time">{new Date(n.created_at).toLocaleDateString()}</span>
-                  </div>
-                  <p className="notif-msg">{n.message}</p>
-                </div>
-                <button className="notif-del" onClick={(e) => { e.stopPropagation(); deleteNotif(n.id); }}>×</button>
+                <p className="text-xs text-secondary mt-0.5 leading-snug">{n.message}</p>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <BottomNav notifCount={notifications.filter(n => !n.is_read).length} />
-
-      <style jsx>{`
-        .notif-list { display: flex; flex-direction: column; gap: 12px; }
-        .notif-card {
-          display: flex; gap: 16px; padding: 16px; background: var(--color-surface);
-          border: 1px solid var(--color-border-2); border-radius: var(--radius-xl);
-          position: relative; transition: all 0.2s; cursor: pointer;
-        }
-        .notif-card.unread { border-left: 4px solid var(--color-accent); }
-        .notif-card.read { opacity: 0.7; }
-        .notif-icon { font-size: 1.5rem; }
-        .notif-main { flex: 1; min-width: 0; }
-        .notif-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
-        .notif-title { font-size: var(--text-sm); font-weight: 700; color: var(--color-text); }
-        .notif-time { font-size: 0.65rem; color: var(--color-text-3); }
-        .notif-msg { font-size: var(--text-xs); color: var(--color-text-2); line-height: 1.4; }
-        .notif-del {
-          background: none; border: none; color: var(--color-text-3);
-          font-size: 1.2rem; cursor: pointer; padding: 4px; line-height: 1;
-        }
-        .empty-state { text-align: center; padding: 60px 20px; }
-        .spinner { width: 30px; height: 30px; border: 3px solid var(--color-surface-3); border-top-color: var(--color-accent); border-radius: 50%; animation: spin 0.8s linear infinite; display: inline-block; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-      `}</style>
-    </div>
+              <button
+                onClick={e => { e.stopPropagation(); deleteNotif(n.id) }}
+                className="shrink-0 w-6 h-6 flex items-center justify-center rounded-full text-tertiary hover:text-danger-DEFAULT hover:bg-danger/5 transition-colors text-base leading-none"
+                aria-label="Eliminar notificación"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   )
 }

@@ -2,58 +2,63 @@
 
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { useState, useEffect } from 'react'
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
-import { getPaletteById, COLOR_PALETTES } from '@/lib/mockData'
+
+const PALETTES = [
+  { id: 'green',   color: '#00DF81' },
+  { id: 'violet',  color: '#8B5CF6' },
+  { id: 'cyan',    color: '#06B6D4' },
+  { id: 'rose',    color: '#F43F5E' },
+  { id: 'amber',   color: '#F59E0B' },
+  { id: 'slate',   color: '#64748B' },
+]
 
 export default function GroupSettingsPage() {
   const router = useRouter()
   const params = useParams()
   const searchParams = useSearchParams()
   const { user } = useAuth()
+  const supabase = createClient()
   
   const action = searchParams.get('action') 
   const groupId = params.groupId as string
   
-  const [group, setGroup] = useState<any>(null)
-  const [members, setMembers] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const [selectedPalette, setSelectedPalette] = useState('violet')
-  const [formName, setFormName] = useState('')
+  const [group,           setGroup]           = useState<any>(null)
+  const [members,         setMembers]         = useState<any[]>([])
+  const [budgets,         setBudgets]         = useState<Record<string, number>>({})
+  const [loading,         setLoading]         = useState(true)
+  const [saving,          setSaving]          = useState(false)
+  const [copied,          setCopied]          = useState(false)
+  const [selectedPalette, setSelectedPalette] = useState('green')
+  const [formName,        setFormName]        = useState('')
 
   useEffect(() => {
     async function fetchGroupData() {
       if (!groupId) return
       
-      const { data: gData } = await supabase
-        .from('groups')
-        .select('*')
-        .eq('id', groupId)
-        .single()
-      
+      const { data: gData } = await supabase.from('groups').select('*').eq('id', groupId).single()
       if (gData) {
         setGroup(gData)
         setFormName(gData.name)
-        setSelectedPalette(gData.palette)
+        setSelectedPalette(gData.palette || 'green')
       }
 
       const { data: mData } = await supabase
         .from('group_members')
-        .select(`
-          user_id,
-          role,
-          profiles (first_name, last_name, email)
-        `)
+        .select(`user_id, role, budget, profiles (first_name, last_name, email)`)
         .eq('group_id', groupId)
 
-      if (mData) setMembers(mData)
+      if (mData) {
+        setMembers(mData)
+        const initialBudgets: Record<string, number> = {}
+        mData.forEach(m => initialBudgets[m.user_id] = Number(m.budget) || 0)
+        setBudgets(initialBudgets)
+      }
       setLoading(false)
     }
-
     fetchGroupData()
-  }, [groupId])
+  }, [groupId, supabase])
 
   const inviteLink = typeof window !== 'undefined' ? `${window.location.origin}/register?invite=${groupId}` : ''
 
@@ -63,114 +68,246 @@ export default function GroupSettingsPage() {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  if (loading) return <div className="page"><div className="spinner" /></div>
-  
-  if (!group || !user) {
-    return <div className="page" style={{ textAlign: 'center', paddingTop: 100 }}>No se encontró la información</div>
+  const handleSave = async () => {
+    if (!group || !user) return
+    setSaving(true)
+    
+    try {
+      // 1. Update Group Info
+      await supabase.from('groups').update({
+        name:    formName,
+        palette: selectedPalette
+      }).eq('id', groupId)
+
+      // 2. Update Budgets
+      const myRole = members.find(m => m.user_id === user.id)?.role
+      const isAdmin = myRole === 'admin'
+
+      for (const m of members) {
+        const hasPermission = isAdmin || m.user_id === user.id
+        if (hasPermission && budgets[m.user_id] !== m.budget) {
+          await supabase
+            .from('group_members')
+            .update({ budget: budgets[m.user_id] })
+            .eq('group_id', groupId)
+            .eq('user_id', m.user_id)
+        }
+      }
+      router.refresh()
+      router.back()
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const currentUserId = user.id
-  const myMember = members.find(m => m.user_id === currentUserId)
-  const isAdmin = myMember?.role === 'admin'
-
-  const handleSave = async () => {
+  const handleSettleMonth = async () => {
+    if (!confirm('¿Estás seguro de cerrar el periodo? Se saldarán todas las deudas actuales y el contador volverá a cero.')) return
     setSaving(true)
-    const { error } = await supabase
-      .from('groups')
-      .update({
-        name: formName,
-        palette: selectedPalette
-      })
-      .eq('id', groupId)
+    try {
+      // 1. Mark all expenses as settled
+      await supabase
+        .from('expenses')
+        .update({ is_settled: true, settled_at: new Date().toISOString() })
+        .eq('group_id', groupId)
+        .eq('is_settled', false)
 
-    if (error) {
-      alert('Error al guardar cambios')
-    } else {
-      router.back()
+      // 2. Create historical settlement record
+      // (En una versión avanzada aquí guardaríamos el JSON de settlements)
+      await supabase.from('monthly_settlements').insert({
+        group_id: groupId,
+        settled_by: user?.id,
+        total_amount: members.reduce((sum, m) => sum + (budgets[m.user_id] || 0), 0)
+      })
+
+      alert('¡Periodo cerrado con éxito! Las deudas actuales han sido archivadas.')
+      router.push('/dashboard')
+    } catch (err) {
+      alert('Error al cerrar periodo')
+    } finally {
+      setSaving(false)
     }
+  }
+
+  const handleManualInvite = async () => {
+    setSaving(true)
+    const email = prompt('Introduce el email de tu amigo:')
+    if (!email) { setSaving(false); return }
+
+    const res = await fetch('/api/invite', {
+      method: 'POST',
+      body: JSON.stringify({
+        email,
+        groupName: group.name,
+        inviteCode: groupId, // Usamos el ID como código de invitación simplificado
+        inviterName: user?.user_metadata?.first_name || 'Un amigo',
+        groupColor: PALETTES.find(p => p.id === selectedPalette)?.color
+      })
+    })
+
+    if (res.ok) alert('Invitación enviada!')
+    else alert('Error al enviar invitación')
     setSaving(false)
   }
 
+  if (loading) return (
+    <div className="flex flex-col gap-5 animate-pulse">
+      <div className="h-40 bg-surface-2 rounded-2xl" />
+      <div className="h-60 bg-surface-2 rounded-2xl" />
+    </div>
+  )
+
+  const isAdmin = members.find(m => m.user_id === user?.id)?.role === 'admin'
+  const groupColor = PALETTES.find(p => p.id === selectedPalette)?.color || '#00DF81'
+
   return (
-    <div className="page" style={{ background: 'var(--color-bg)' }}>
-      <header className="page-header">
-        <button className="btn btn--icon btn--ghost" onClick={() => router.back()}>←</button>
-        <h1 className="page-header__title">Configuración</h1>
-        <button className="btn btn--sm btn--primary" onClick={handleSave} disabled={saving || !isAdmin}>
-          {saving ? '...' : 'Guardar'}
+    <>
+      <header className="flex items-center justify-between mb-6">
+        <button onClick={() => router.back()}
+          className="p-2 rounded-xl bg-surface-2 border border-subtle text-secondary hover:text-primary transition-colors">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M19 12H5M12 5l-7 7 7 7" />
+          </svg>
+        </button>
+        <h1 className="text-lg font-black text-primary tracking-tight">Configuración</h1>
+        <button 
+          onClick={handleSave} 
+          disabled={saving}
+          className="text-xs font-black px-4 py-2 rounded-xl bg-accent text-[#000F0A] shadow-lg disabled:opacity-50"
+          style={{ background: groupColor }}
+        >
+          {saving ? 'Guardando...' : 'Guardar'}
         </button>
       </header>
 
-      <div className="page-content">
-        <div className="card">
-          <p className="section-title">Info del grupo</p>
-          <div className="input-group" style={{ marginTop: 8 }}>
-            <label className="input-label">Nombre</label>
-            <input className="input" value={formName} onChange={e => setFormName(e.target.value)} disabled={!isAdmin} />
+      <div className="flex flex-col gap-5 animate-fade-in pb-20">
+        
+        {/* Group Info */}
+        <section className="p-6 rounded-2xl border border-subtle bg-surface flex flex-col gap-4">
+          <h3 className="text-[10px] font-black text-tertiary uppercase tracking-[0.2em] mb-1">Info del grupo</h3>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-bold text-secondary uppercase tracking-widest pl-1">Nombre</label>
+            <input 
+              type="text" 
+              value={formName} 
+              onChange={e => setFormName(e.target.value)} 
+              disabled={!isAdmin}
+              className="w-full bg-surface-2 border border-subtle rounded-xl px-4 py-3 text-sm font-bold text-primary focus:outline-none focus:border-accent disabled:opacity-50"
+            />
           </div>
-          <div className="input-group" style={{ marginTop: 12 }}>
-            <label className="input-label">Moneda</label>
-            <input className="input" value={group.currency} disabled style={{ opacity: 0.6 }} />
+          <div className="flex flex-col gap-1.5 opacity-60">
+            <label className="text-[10px] font-bold text-secondary uppercase tracking-widest pl-1">Moneda (No editable)</label>
+            <div className="w-full bg-surface-3 border border-subtle rounded-xl px-4 py-3 text-sm font-bold text-tertiary uppercase">
+              {group?.currency}
+            </div>
           </div>
-        </div>
+        </section>
 
-        <div className="card">
-          <p className="section-title">Color del grupo</p>
-          <div className="palette-row" style={{ marginTop: 12 }}>
-            {COLOR_PALETTES.map(p => (
-              <button key={p.id}
-                className={`pal-swatch ${selectedPalette === p.id ? 'selected' : ''}`}
+        {/* Palette Selection */}
+        <section className="p-6 rounded-2xl border border-subtle bg-surface">
+          <h3 className="text-[10px] font-black text-tertiary uppercase tracking-[0.2em] mb-4 text-center">Color del grupo</h3>
+          <div className="flex justify-around items-center">
+            {PALETTES.map(p => (
+              <button 
+                key={p.id}
+                onClick={() => isAdmin && setSelectedPalette(p.id)}
+                className={`
+                  w-8 h-8 rounded-full border-4 transition-all
+                  ${selectedPalette === p.id ? 'border-white scale-125 shadow-lg' : 'border-transparent opacity-40'}
+                `}
                 style={{ background: p.color }}
-                onClick={() => isAdmin && setSelectedPalette(p.id)}>
-                {selectedPalette === p.id && '✓'}
-              </button>
+              />
             ))}
           </div>
-        </div>
+        </section>
 
-        <div className={`card ${action === 'invite' ? 'highlight-invite' : ''}`}>
-          <p className="section-title">🔗 Invitar amigos</p>
-          <div className="invite-link-box" style={{ marginTop: 12 }}>
-            <code className="invite-link-text">{inviteLink}</code>
-            <button className={`btn btn--sm ${copied ? 'btn--success' : 'btn--primary'}`} onClick={handleCopy}>
-              {copied ? '¡Hecho!' : 'Copiar'}
+        {/* Invite Friends */}
+        <section className={`p-6 rounded-2xl border bg-surface flex flex-col gap-4 transition-all ${action === 'invite' ? 'border-accent shadow-lg shadow-accent/10 scale-[1.02]' : 'border-subtle'}`}>
+          <div className="flex items-center justify-between">
+            <h3 className="text-[10px] font-black text-tertiary uppercase tracking-[0.2em]">🔗 Invitar amigos</h3>
+            <button onClick={handleManualInvite} className="text-[10px] font-black text-accent uppercase tracking-widest border border-accent/20 px-3 py-1 rounded-lg hover:bg-accent/5">
+              Enviar Email
             </button>
           </div>
-        </div>
+          <div className="flex items-center gap-2 p-2.5 bg-surface-2 rounded-xl border border-subtle">
+            <code className="flex-1 text-[10px] font-mono font-bold text-tertiary overflow-hidden truncate px-2">
+              {inviteLink}
+            </code>
+            <button 
+              onClick={handleCopy}
+              className={`text-[10px] font-black px-4 py-2 rounded-lg transition-all ${copied ? 'bg-accent text-[#000F0A]' : 'bg-surface-3 text-secondary'}`}
+            >
+              {copied ? '¡Copiado!' : 'Copiar'}
+            </button>
+          </div>
+        </section>
 
-        <div className="card">
-          <p className="section-title">Integrantes ({members.length})</p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+        {/* Members Management */}
+        <section className="p-6 rounded-2xl border border-subtle bg-surface flex flex-col gap-4">
+          <h3 className="text-[10px] font-black text-tertiary uppercase tracking-[0.2em] mb-2 px-1">Integrantes ({members.length})</h3>
+          <div className="flex flex-col gap-4">
             {members.map(m => (
-              <div key={m.user_id} className="member-setting-row">
-                <div className="ms-ava" style={{ background: 'var(--color-accent)' }}>
-                  {m.profiles?.first_name?.substring(0, 1) || '👤'}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>
-                    {m.profiles?.first_name} {m.profiles?.last_name}
-                    {m.user_id === user.id && <span style={{ marginLeft: 6, fontSize: '0.65rem', background: 'var(--color-accent-dim)', padding: '2px 8px', borderRadius: 999 }}>Vos</span>}
+              <div key={m.user_id} className="flex flex-col gap-2 p-4 rounded-xl bg-surface-2 border border-subtle">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full bg-surface-3 flex items-center justify-center text-[10px] font-black text-secondary border border-subtle">
+                      {m.profiles?.first_name?.charAt(0) || '?'}
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-primary">
+                        {m.profiles?.first_name} {m.profiles?.last_name}
+                        {m.user_id === user?.id && <span className="ml-2 text-[8px] font-black bg-accent/20 text-accent px-1.5 py-0.5 rounded uppercase">Vos</span>}
+                      </p>
+                      <p className="text-[9px] text-tertiary truncate max-w-[140px]">{m.profiles?.email}</p>
+                    </div>
                   </div>
-                  <div style={{ fontSize: '0.7rem', opacity: 0.6 }}>{m.profiles?.email}</div>
+                  <span className="text-[8px] font-black text-tertiary border border-subtle px-2 py-1 rounded-md uppercase tracking-widest">{m.role}</span>
                 </div>
-                <div className="badge badge--neutral">{m.role}</div>
+                
+                <div className="flex items-center justify-between pt-1 border-t border-subtle/50 mt-1">
+                  <span className="text-[9px] font-bold text-tertiary uppercase tracking-tight">Presupuesto Sugerido:</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-black text-tertiary">{group?.currency}</span>
+                    <input 
+                      type="number"
+                      disabled={!isAdmin && m.user_id !== user?.id}
+                      value={budgets[m.user_id] || ''} 
+                      onChange={e => setBudgets(b => ({ ...b, [m.user_id]: parseFloat(e.target.value) || 0 }))}
+                      className="w-24 bg-surface border border-subtle rounded-lg px-2 py-1.5 text-xs font-black text-primary text-right focus:outline-none focus:border-accent disabled:opacity-50"
+                    />
+                  </div>
+                </div>
               </div>
             ))}
           </div>
-        </div>
-      </div>
+        </section>
 
-      <style jsx>{`
-        .card { background: var(--color-surface); padding: 20px; border-radius: 16px; border: 1px solid var(--color-border-2); margin-bottom: 16px; }
-        .section-title { font-size: 0.75rem; font-weight: 800; text-transform: uppercase; color: var(--color-text-3); letter-spacing: 0.05em; }
-        .palette-row { display: flex; gap: 10px; flex-wrap: wrap; }
-        .pal-swatch { width: 36px; height: 36px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; transition: transform 0.2s; }
-        .pal-swatch.selected { border-color: white; transform: scale(1.1); }
-        .invite-link-box { display: flex; align-items: center; gap: 8px; background: var(--color-surface-2); padding: 10px; border-radius: 12px; }
-        .invite-link-text { flex: 1; font-size: 0.7rem; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.6; }
-        .member-setting-row { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--color-surface-2); border-radius: 12px; }
-        .ms-ava { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 12px; }
-      `}</style>
-    </div>
+        {/* Danger Zone */}
+        {isAdmin && (
+          <section className="p-6 rounded-2xl border border-danger-500/20 bg-danger-500/5 flex flex-col gap-4 mt-4">
+            <h3 className="text-[10px] font-black text-danger-500 uppercase tracking-[0.2em]">Zona de Peligro</h3>
+            <p className="text-[10px] text-secondary">Estas acciones afectan a todos los integrantes del grupo.</p>
+            
+            <div className="flex flex-col gap-2">
+              <button 
+                onClick={handleSettleMonth}
+                className="w-full py-3 rounded-xl bg-accent/10 border border-accent/20 text-accent text-xs font-black hover:bg-accent/20 transition-all uppercase tracking-widest"
+              >
+                Cerrar Periodo Actual 🏦
+              </button>
+              
+              <button 
+                onClick={() => confirm('¿Seguro que querés eliminar el grupo?') && alert('Función de borrado en desarrollo')}
+                className="w-full py-3 rounded-xl border border-danger-500/20 text-danger-500 text-xs font-black hover:bg-danger-500 hover:text-white transition-all uppercase tracking-widest"
+              >
+                Eliminar Grupo Forever 🗑️
+              </button>
+            </div>
+          </section>
+        )}
+
+      </div>
+    </>
   )
 }

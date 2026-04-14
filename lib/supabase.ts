@@ -1,14 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: true,
-  },
-})
-
+// Retrocompatibilidad: lib/supabase.ts → lib/supabase/client.ts
+// Evita romper imports existentes en el código viejo
+export { supabase, createClient } from '@/lib/supabase/client'
 export type { User, Session } from '@supabase/supabase-js'

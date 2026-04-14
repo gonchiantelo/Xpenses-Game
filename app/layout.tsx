@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next'
+import { ThemeProvider } from '@/components/Providers'
+import AppShell from '@/components/layout/AppShell'
 import '../styles/globals.css'
-import { AuthProvider } from '@/components/AuthProvider'
 
 export const metadata: Metadata = {
   title: 'Xpenses Game — Dividí bien, gastá mejor',
@@ -24,14 +25,13 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: '#0E0B1A',
+  themeColor: [
+    { media: '(prefers-color-scheme: dark)',  color: '#000F0A' },
+    { media: '(prefers-color-scheme: light)', color: '#F1F7F6' },
+  ],
 }
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="es" suppressHydrationWarning>
       <head>
@@ -39,9 +39,17 @@ export default function RootLayout({
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
       </head>
       <body>
-        <AuthProvider>
-          {children}
-        </AuthProvider>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="dark"
+          enableSystem={false}
+          disableTransitionOnChange={false}
+          storageKey="xpenses-theme"
+        >
+          <AppShell>
+            {children}
+          </AppShell>
+        </ThemeProvider>
       </body>
     </html>
   )

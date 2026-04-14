@@ -1,352 +1,347 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
-import {
-  CATEGORIES,
-  formatAmount, getCurrencySymbol, getPaletteById
-} from '@/lib/mockData'
-import BottomNav from '@/components/BottomNav'
+import { useXpenses } from '@/hooks/useXpenses'
+import { calculateEqualSplit } from '@/lib/finance/splits'
+
+const CATEGORIES = [
+  { id: 'food',      name: 'Comida',    icon: '🍕', color: '#F87171' },
+  { id: 'home',      name: 'Hogar',     icon: '🏠', color: '#60A5FA' },
+  { id: 'transport', name: 'Transporte', icon: '🚗', color: '#FBBF24' },
+  { id: 'leisure',   name: 'Ocio',      icon: '🎮', color: '#A78BFA' },
+  { id: 'services',  name: 'Servicios', icon: '🔋', color: '#34D399' },
+  { id: 'others',    name: 'Otros',     icon: '📦', color: '#9CA3AF' },
+]
 
 type Step = 'monto' | 'categoria' | 'detalles' | 'split'
-
-import { Suspense } from 'react'
+const STEPS_LIST: Step[] = ['monto', 'categoria', 'detalles', 'split']
 
 export default function AddExpensePage() {
   return (
-    <Suspense fallback={<div className="page-content">Cargando...</div>}>
+    <Suspense fallback={
+      <div className="flex flex-col items-center justify-center p-20 gap-4">
+        <div className="w-8 h-8 rounded-full border-2 border-accent/20 border-t-accent animate-spin" />
+        <p className="text-xs text-tertiary">Preparando billetera...</p>
+      </div>
+    }>
       <AddExpenseContent />
     </Suspense>
   )
 }
 
-import { useXpenses } from '@/hooks/useXpenses'
-
 function AddExpenseContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { user } = useAuth()
-  const { groups, loading: loadingData } = useXpenses()
+  const { groups, loading: loadingGroups } = useXpenses()
+  const supabase = createClient()
+
   const preGroupId = searchParams.get('group') ?? ''
 
-  const [step, setStep] = useState<Step>('monto')
+  const [step,    setStep]    = useState<Step>('monto')
   const [loading, setLoading] = useState(false)
   
   const [form, setForm] = useState({
-    groupId: preGroupId,
-    amount: '',
-    categoryId: '',
+    groupId:     preGroupId,
+    amount:      '',
+    categoryId:  '',
     description: '',
-    notes: '',
-    paidById: user?.id || '',
-    date: new Date().toISOString().slice(0, 10),
-    isFixed: false,
+    notes:       '',
+    paidById:    user?.id || '',
+    date:        new Date().toISOString().slice(0, 10),
+    isFixed:     false,
   })
 
   const [splits, setSplits] = useState<Record<string, number>>({})
-  const [splitMode, setSplitMode] = useState<'equal' | 'manual'>('equal')
 
-  // Derivamos el grupo actual y sus miembros del hook central
   const currentGroup = groups.find(g => g.id === form.groupId)
-  const groupMembers = currentGroup?.members?.map(m => ({
-    id: m.user_id,
-    firstName: m.profiles?.first_name || 'Amigo',
-    lastName: m.profiles?.last_name || '',
-    avatarColor: getPaletteById(currentGroup.palette || 'violet').color,
-    avatarInitials: m.profiles?.first_name?.substring(0, 1) || '👤'
-  })) || []
+  const currency     = currentGroup?.currency ?? 'UYU'
+  const symbol       = currency === 'USD' ? 'US$' : currency === 'EUR' ? '€' : '$'
 
+  const groupMembers = currentGroup?.members || []
+  const stepIdx      = STEPS_LIST.indexOf(step)
+
+  // Actualizar splits automáticamente al cambiar el monto o el pagador
   useEffect(() => {
-    if (user && !form.paidById) {
-      setForm(p => ({ ...p, paidById: user.id }))
-    }
+    const amt = parseFloat(form.amount)
+    if (isNaN(amt) || amt <= 0 || groupMembers.length === 0 || !form.paidById) return
+    
+    const memberIds = groupMembers.map(m => m.user_id)
+    const splitArray = calculateEqualSplit(amt, memberIds, form.paidById)
+    
+    // Convertimos el array de la librería a nuestro mapa local de visualización
+    const splitMap: Record<string, number> = {}
+    splitArray.forEach(s => { splitMap[s.memberId] = s.amount })
+    
+    // El pagador "no se debe a sí mismo" en el mapa de deudas, 
+    // pero para la UI queremos mostrar cuánto pone cada uno
+    const share = amt / memberIds.length
+    memberIds.forEach(id => {
+      splitMap[id] = id === form.paidById ? share : (splitMap[id] || share)
+    })
+
+    setSplits(splitMap)
+  }, [form.amount, groupMembers, form.paidById])
+
+  // Asegurar que el pagador sea el usuario actual por defecto
+  useEffect(() => {
+    if (user && !form.paidById) updateForm('paidById', user.id)
   }, [user, form.paidById])
 
-  const currency = currentGroup?.currency ?? 'UYU'
-  const symbol = getCurrencySymbol(currency)
+  const updateForm = (k: string, v: any) => setForm(p => ({ ...p, [k]: v }))
 
-  useEffect(() => {
-    if (!groupMembers.length || !form.amount) return
-    const amt = parseFloat(form.amount)
-    if (isNaN(amt)) return
-    const n = groupMembers.length
-    const equal = Math.round((amt / n) * 100) / 100
-    const s: Record<string, number> = {}
-    groupMembers.forEach((m: any) => { s[m.id] = equal })
-    setSplits(s)
-  }, [groupMembers, form.amount])
-
-  const STEPS: Step[] = ['monto', 'categoria', 'detalles', 'split']
-  const stepIdx = STEPS.indexOf(step)
-  
   const canGoNext = () => {
-    if (step === 'monto') return !!form.amount && parseFloat(form.amount) > 0 && !!form.groupId
+    if (step === 'monto')     return !!form.amount && parseFloat(form.amount) > 0 && !!form.groupId
     if (step === 'categoria') return !!form.categoryId
     return true
   }
 
   const handleNext = async () => {
-    const idx = STEPS.indexOf(step)
-    if (idx < STEPS.length - 1) {
-      setStep(STEPS[idx + 1])
+    if (stepIdx < STEPS_LIST.length - 1) {
+      setStep(STEPS_LIST[stepIdx + 1])
     } else {
       setLoading(true)
-      const { error } = await supabase.from('expenses').insert([{
-        group_id: form.groupId,
-        paid_by_id: form.paidById,
-        amount: parseFloat(form.amount),
-        description: form.description,
-        category_id: form.categoryId,
-        date: form.date,
-        is_fixed: form.isFixed,
-        notes: form.notes
-      }])
-      
-      if (error) {
-        alert('Error al guardar el gasto: ' + error.message)
-        setLoading(true)
-      } else {
-        // LÓGICA DE NOTIFICACIONES (Punto 4 del plan)
-        try {
-          const newAmt = parseFloat(form.amount)
-          const newRemaining = (currentGroup?.groupAvailable || 0) - newAmt
-          const payerName = groupMembers.find(m => m.id === form.paidById)?.firstName || 'Alguien'
-          
-          const notifs = currentGroup?.members.map((m: any) => ({
-            user_id: m.user_id,
-            group_id: form.groupId,
-            type: newRemaining < 0 ? 'overbudget' : 'expense',
-            title: newRemaining < 0 ? '🚨 ¡Presupuesto Excedido!' : '💰 Nuevo Gasto',
-            message: `${payerName} gastó ${formatAmount(newAmt, currency)} en ${currentGroup.name}. ${newRemaining < 0 ? `Estamos excedidos por ${formatAmount(Math.abs(newRemaining), currency)}` : `Quedan ${formatAmount(newRemaining, currency)}`}`
-          }))
+      const amtNum = parseFloat(form.amount)
 
-          if (notifs && notifs.length > 0) {
-            await supabase.from('notifications').insert(notifs)
-          }
-        } catch (nErr) {
-          console.error('Error enviando notificaciones:', nErr)
-        }
-        
-        router.push(`/groups/${form.groupId}`)
+      // 1. Insertar Gasto
+      const { data: expData, error: expErr } = await supabase
+        .from('expenses')
+        .insert([{
+          group_id:    form.groupId,
+          paid_by_id:  form.paidById,
+          amount:      amtNum,
+          description: form.description || CATEGORIES.find(c => c.id === form.categoryId)?.name || 'Gasto',
+          category_id: form.categoryId,
+          date:        form.date,
+          is_fixed:    form.isFixed,
+          notes:       form.notes
+        }])
+        .select()
+        .single()
+      
+      if (expErr) {
+        alert('Error: ' + expErr.message)
+        setLoading(false)
+        return
       }
+
+      // 2. Insertar Splits (Deuda trazable)
+      const splitInserts = Object.entries(splits).map(([uid, debt]) => ({
+        expense_id: expData.id,
+        user_id:    uid,
+        amount:     debt
+      }))
+
+      const { error: splitErr } = await supabase.from('expense_splits').insert(splitInserts)
+      if (splitErr) console.error('Error insertando splits:', splitErr)
+
+      // 3. Notificaciones (Asíncrono)
+      const payerName = groupMembers.find(m => m.user_id === form.paidById)?.profiles?.first_name || 'Alguien'
+      const notifs    = groupMembers.map(m => ({
+        user_id:  m.user_id,
+        group_id: form.groupId,
+        type:     'expense',
+        title:    '💰 Nuevo Gasto',
+        message:  `${payerName} cargó ${symbol}${amtNum.toLocaleString()} en ${currentGroup?.name}`
+      }))
+      await supabase.from('notifications').insert(notifs)
+
+      router.push(`/groups/${form.groupId}`)
     }
   }
 
-  const updateSplit = (userId: string, val: number) => {
-    setSplits(prev => ({ ...prev, [userId]: val }))
-  }
-
-  const totalSplit = Object.values(splits).reduce((s, v) => s + v, 0)
-  const amount = parseFloat(form.amount) || 0
-
   return (
-    <div className="page" style={{ background: 'var(--color-bg)' }}>
-      <header className="page-header">
-        <button id="btn-back-expense" className="btn btn--icon btn--ghost"
-          onClick={() => stepIdx > 0 ? setStep(STEPS[stepIdx - 1]) : router.back()}>
-          ←
+    <>
+      {/* Mini Stepper Header */}
+      <header className="flex items-center justify-between mb-4">
+        <button onClick={() => stepIdx > 0 ? setStep(STEPS_LIST[stepIdx - 1]) : router.back()}
+          className="p-2 rounded-xl bg-surface-2 border border-subtle text-secondary hover:text-primary transition-colors">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M19 12H5M12 5l-7 7 7 7" />
+          </svg>
         </button>
-        <div style={{ flex: 1, textAlign: 'center' }}>
-          <h1 className="page-header__title">Nuevo Gasto</h1>
-          <p className="page-header__subtitle">Paso {stepIdx + 1} de {STEPS.length}</p>
+        <div className="flex flex-col items-center">
+          <span className="text-[10px] font-black text-tertiary uppercase tracking-widest leading-none mb-1">Nuevo Gasto</span>
+          <div className="flex gap-1">
+            {STEPS_LIST.map((s, i) => (
+              <div key={s} className={`h-1 w-6 rounded-full transition-all duration-300 ${i <= stepIdx ? 'bg-accent' : 'bg-surface-3'}`} />
+            ))}
+          </div>
         </div>
-        <div style={{ width: 44 }} />
+        <div className="w-9" />
       </header>
 
-      <div style={{ display: 'flex', gap: 4, padding: '0 16px 4px' }}>
-        {STEPS.map((s, i) => (
-          <div key={s} style={{
-            height: 3, flex: 1, borderRadius: 999,
-            background: i <= stepIdx ? 'var(--color-accent)' : 'var(--color-surface-2)',
-            transition: 'background 0.3s'
-          }} />
-        ))}
-      </div>
-
-      <div className="page-content">
+      <div className="flex flex-col gap-6 animate-fade-in pb-20">
+        
+        {/* STEP 1: MONTO Y GRUPO */}
         {step === 'monto' && (
-          <div className="step-section">
-            
-            <div className="input-group">
-              <label className="input-label">Seleccionar Grupo</label>
+          <div className="flex flex-col gap-8 animate-slide-up">
+            <div className="flex flex-col gap-2">
+              <label className="text-xs font-bold text-tertiary uppercase tracking-wider text-center">Seleccionar Grupo</label>
               <select 
-                className="input" 
                 value={form.groupId} 
-                onChange={e => setForm(p => ({ ...p, groupId: e.target.value }))}
-                style={{ background: 'var(--color-surface-2)' }}
+                onChange={e => updateForm('groupId', e.target.value)}
+                className="w-full bg-surface-2 border border-subtle rounded-2xl px-4 py-3 text-sm font-bold text-primary focus:outline-none focus:border-accent transition-all cursor-pointer shadow-sm"
               >
-                <option value="">-- Elegir grupo --</option>
-                {groups.map((g: any) => (
+                <option value="">-- ¿En qué grupo fue? --</option>
+                {groups.map(g => (
                   <option key={g.id} value={g.id}>{g.emoji} {g.name}</option>
                 ))}
               </select>
             </div>
 
-            <div className="amount-block">
-              <div className="currency-symbol">{symbol}</div>
-              <input
-                id="input-amount"
-                className="amount-input"
-                type="number"
-                inputMode="decimal"
-                placeholder="0"
-                value={form.amount}
-                onChange={e => setForm(p => ({ ...p, amount: e.target.value }))}
-                autoFocus
-              />
+            <div className="flex flex-col items-center py-4">
+              <div className="flex items-baseline gap-2">
+                <span className="text-3xl font-black text-tertiary">{symbol}</span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="0"
+                  value={form.amount}
+                  onChange={e => updateForm('amount', e.target.value)}
+                  autoFocus
+                  className="w-48 bg-transparent text-6xl font-black text-primary placeholder:text-surface-3 focus:outline-none text-center tracking-tighter"
+                />
+              </div>
             </div>
 
             {form.groupId && (
-              <div className="input-group">
-                <label className="input-label">¿Quién pagó?</label>
-                <div className="payer-row">
-                  {groupMembers.map((u: any) => (
-                    <button key={u.id} id={`payer-${u.id}`}
-                      className={`payer-btn ${form.paidById === u.id ? 'selected' : ''}`}
-                      onClick={() => setForm(p => ({ ...p, paidById: u.id }))}>
-                      <div className="payer-ava" style={{ background: u.avatarColor }}>{u.avatarInitials}</div>
-                      <span>{u.id === user?.id ? 'Yo' : u.firstName}</span>
+              <div className="flex flex-col gap-3">
+                <label className="text-xs font-bold text-tertiary uppercase tracking-wider text-center">¿Quién pagó?</label>
+                <div className="flex flex-wrap justify-center gap-3">
+                  {groupMembers.map(m => (
+                    <button
+                      key={m.user_id}
+                      onClick={() => updateForm('paidById', m.user_id)}
+                      className={`
+                        flex flex-col items-center gap-2 p-3 rounded-2xl border transition-all duration-200
+                        ${form.paidById === m.user_id ? 'bg-accent/10 border-accent text-accent scale-105' : 'bg-surface border-subtle text-secondary'}
+                      `}
+                    >
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs ${form.paidById === m.user_id ? 'bg-accent text-[#000F0A]' : 'bg-surface-3 text-tertiary'}`}>
+                        {m.profiles?.first_name?.charAt(0) || '?'}
+                      </div>
+                      <span className="text-[10px] font-bold uppercase">{m.user_id === user?.id ? 'Yo' : m.profiles?.first_name}</span>
                     </button>
                   ))}
-                  {groupMembers.length === 0 && <p style={{ fontSize: '0.7rem', opacity: 0.5 }}>Cargando integrantes...</p>}
                 </div>
               </div>
             )}
-
-            <div className="input-group">
-              <label className="input-label">Fecha</label>
-              <input id="input-date" className="input" type="date"
-                value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} />
-            </div>
           </div>
         )}
 
+        {/* STEP 2: CATEGORÍA */}
         {step === 'categoria' && (
-          <div className="step-section">
-            <div className="amount-preview">
-              <span style={{ color: 'var(--color-text-3)', fontSize: 'var(--text-sm)' }}>Monto</span>
-              <span style={{ fontWeight: 800, fontSize: 'var(--text-2xl)', letterSpacing: '-0.04em' }}>
-                {formatAmount(amount, currency)}
-              </span>
+          <div className="flex flex-col gap-6 animate-slide-up">
+            <div className="text-center">
+              <p className="text-4xl font-black text-primary">{symbol}{form.amount}</p>
+              <p className="text-[10px] font-bold text-tertiary uppercase mt-1">Total a dividir</p>
             </div>
-            <div className="input-group">
-              <label className="input-label">Rubro</label>
-              <div className="cat-grid">
-                {CATEGORIES.map(cat => (
-                  <button key={cat.id} id={`cat-${cat.id}`}
-                    className={`cat-btn ${form.categoryId === cat.id ? 'selected' : ''}`}
-                    style={form.categoryId === cat.id ? { borderColor: cat.color, background: `${cat.color}15` } : {}}
-                    onClick={() => setForm(p => ({ ...p, categoryId: cat.id }))}>
-                    <span className="cat-btn-icon">{cat.icon}</span>
-                    <span className="cat-btn-name">{cat.name}</span>
-                  </button>
-                ))}
-              </div>
+            
+            <div className="grid grid-cols-3 gap-3">
+              {CATEGORIES.map(cat => (
+                <button
+                  key={cat.id}
+                  onClick={() => updateForm('categoryId', cat.id)}
+                  className={`
+                    flex flex-col items-center gap-3 p-4 rounded-2xl border transition-all
+                    ${form.categoryId === cat.id ? 'bg-surface shadow-card-md border-accent' : 'bg-surface-2 border-subtle opacity-60'}
+                  `}
+                >
+                  <span className="text-3xl">{cat.icon}</span>
+                  <span className="text-[10px] font-bold text-secondary uppercase tracking-tight">{cat.name}</span>
+                </button>
+              ))}
             </div>
           </div>
         )}
 
+        {/* STEP 3: DETALLES */}
         {step === 'detalles' && (
-          <div className="step-section">
-            <div className="amount-preview">
-              <span style={{ color: 'var(--color-text-3)', fontSize: 'var(--text-sm)' }}>
-                {CATEGORIES.find(c => c.id === form.categoryId)?.icon} {CATEGORIES.find(c => c.id === form.categoryId)?.name}
-              </span>
-              <span style={{ fontWeight: 800, fontSize: 'var(--text-2xl)', letterSpacing: '-0.04em' }}>
-                {formatAmount(amount, currency)}
-              </span>
-            </div>
-
-            <div className="input-group">
-              <label className="input-label" htmlFor="input-desc">Descripción</label>
-              <input id="input-desc" className="input" placeholder="Ej: Supermercado Disco..."
-                value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} />
-            </div>
-
-            <div className="input-group">
-              <label className="input-label" htmlFor="input-notes">Comentarios (opcional)</label>
-              <textarea id="input-notes" className="input" placeholder="Notas adicionales..."
-                rows={3} value={form.notes}
-                onChange={e => setForm(p => ({ ...p, notes: e.target.value }))}
-                style={{ resize: 'none', fontFamily: 'inherit' }} />
-            </div>
-          </div>
-        )}
-
-        {step === 'split' && (
-          <div className="step-section">
-            <div className="amount-preview">
-              <span style={{ color: 'var(--color-text-3)', fontSize: 'var(--text-sm)' }}>{form.description || 'Gasto'}</span>
-              <span style={{ fontWeight: 800, fontSize: 'var(--text-2xl)', letterSpacing: '-0.04em' }}>
-                {formatAmount(amount, currency)}
-              </span>
-            </div>
-
-            <div className="split-mode-row">
-              <button id="split-equal" className={`split-mode-btn ${splitMode === 'equal' ? 'active' : ''}`}
-                onClick={() => setSplitMode('equal')}>⚖️ Equitativo</button>
-              <button id="split-manual" className={`split-mode-btn ${splitMode === 'manual' ? 'active' : ''}`}
-                onClick={() => setSplitMode('manual')}>✏️ Manual</button>
-            </div>
-
-            {groupMembers.map((u: any) => (
-              <div key={u.id} className="split-row">
-                <div className="split-ava" style={{ background: u.avatarColor }}>{u.avatarInitials}</div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>
-                    {u.id === user?.id ? 'Yo' : `${u.firstName} ${u.lastName}`}
-                  </div>
+          <div className="flex flex-col gap-6 animate-slide-up">
+            <div className="bg-surface-2 p-5 rounded-2xl border border-subtle flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-3xl">{CATEGORIES.find(c => c.id === form.categoryId)?.icon}</span>
+                <div>
+                  <p className="text-sm font-bold text-primary">{CATEGORIES.find(c => c.id === form.categoryId)?.name}</p>
+                  <p className="text-[10px] text-tertiary font-bold uppercase">{form.date}</p>
                 </div>
-                <span style={{ fontSize: 'var(--text-base)', fontWeight: 700 }}>
-                  {symbol} {(splits[u.id] ?? 0).toFixed(0)}
-                </span>
               </div>
-            ))}
+              <p className="text-xl font-black text-accent">{symbol}{form.amount}</p>
+            </div>
+
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-bold text-secondary uppercase tracking-widest pl-1">Descripción</label>
+                <input
+                  type="text"
+                  placeholder="Ej: Supermercado, Cena..."
+                  value={form.description}
+                  onChange={e => updateForm('description', e.target.value)}
+                  className="w-full bg-surface border border-subtle rounded-xl px-4 py-3 text-sm text-primary focus:outline-none focus:border-accent"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-bold text-secondary uppercase tracking-widest pl-1">Notas (opcional)</label>
+                <textarea
+                  placeholder="Detalles adicionales..."
+                  rows={3}
+                  value={form.notes}
+                  onChange={e => updateForm('notes', e.target.value)}
+                  className="w-full bg-surface border border-subtle rounded-xl px-4 py-3 text-sm text-primary focus:outline-none focus:border-accent resize-none"
+                />
+              </div>
+            </div>
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-          {stepIdx > 0 && (
-            <button className="btn btn--ghost" style={{ flex: 1 }}
-              onClick={() => setStep(STEPS[stepIdx - 1])}>← Atrás</button>
-          )}
+        {/* STEP 4: SPLIT / RESUMEN */}
+        {step === 'split' && (
+          <div className="flex flex-col gap-6 animate-slide-up">
+            <div className="text-center p-6 rounded-3xl bg-accent text-[#000F0A]">
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-1">Resumen del Gasto</p>
+              <p className="text-4xl font-black">{symbol}{form.amount}</p>
+              <p className="text-xs font-bold mt-1 opacity-80">{form.description || 'Nuevo gasto'}</p>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <h3 className="text-xs font-bold text-tertiary uppercase tracking-widest text-center mb-1">División Equitativa</h3>
+              {groupMembers.map(m => (
+                <div key={m.user_id} className="flex items-center justify-between p-4 rounded-xl border border-subtle bg-surface">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center text-[10px] font-bold text-secondary">
+                      {m.profiles?.first_name?.charAt(0) || '?'}
+                    </div>
+                    <span className="text-sm font-bold text-primary">{m.user_id === user?.id ? 'Yo' : m.profiles?.first_name}</span>
+                  </div>
+                  <span className="text-sm font-black text-accent">{symbol}{(splits[m.user_id] || 0).toFixed(0)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Action Button */}
+        <div className="fixed bottom-6 left-0 right-0 px-6 max-w-lg mx-auto z-10">
           <button
-            id="btn-expense-next"
-            className={`btn btn--primary ${loading ? 'loading' : ''}`}
-            style={{ flex: 2 }}
             onClick={handleNext}
-            disabled={!canGoNext() || loading}>
-            {loading ? <span className="spinner" /> :
-              step === 'split' ? '✅ Guardar gasto' : 'Continuar →'}
+            disabled={!canGoNext() || loading}
+            className={`
+              w-full py-4 rounded-2xl text-sm font-bold text-[#000F0A] shadow-lg transition-all duration-200
+              disabled:opacity-50 disabled:scale-95 active:scale-95
+              ${step === 'split' ? 'bg-[#00DF81]' : 'bg-surface text-primary border border-subtle'}
+            `}
+            style={step === 'split' ? { background: 'linear-gradient(135deg, #00DF81 0%, #2CC295 100%)' } : {}}
+          >
+            {loading ? <div className="flex items-center justify-center gap-2"><div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" /> Guardando...</div> :
+              step === 'split' ? '✅ Confirmar y Guardar' : 'Siguiente'}
           </button>
         </div>
-      </div>
 
-      <style jsx>{`
-        .step-section { display: flex; flex-direction: column; gap: var(--space-5); }
-        .amount-block { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 32px 0; }
-        .currency-symbol { font-size: 2rem; font-weight: 700; color: var(--color-text-3); }
-        .amount-input { background: none; border: none; outline: none; font-size: 4rem; font-weight: 900; letter-spacing: -0.06em; color: var(--color-text); width: 200px; text-align: center; }
-        .payer-row { display: flex; gap: 8px; flex-wrap: wrap; }
-        .payer-btn { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 14px; background: var(--color-surface-2); border: 1.5px solid var(--color-border-2); border-radius: var(--radius-lg); cursor: pointer; transition: all 0.15s; font-size: var(--text-xs); font-weight: 600; color: var(--color-text-2); }
-        .payer-btn.selected { border-color: var(--color-accent); background: var(--color-accent-dim); color: var(--color-accent-light); }
-        .payer-ava { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: white; }
-        .amount-preview { background: var(--color-surface-2); border-radius: var(--radius-xl); padding: 20px; text-align: center; display: flex; flex-direction: column; gap: 4px; }
-        .cat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-        .cat-btn { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 8px; background: var(--color-surface-2); border: 1.5px solid var(--color-border-2); border-radius: var(--radius-lg); cursor: pointer; }
-        .cat-btn.selected { transform: scale(1.05); }
-        .cat-btn-icon { font-size: 1.5rem; }
-        .cat-btn-name { font-size: 0.65rem; font-weight: 600; text-align: center; }
-        .split-mode-row { display: flex; gap: 8px; }
-        .split-mode-btn { flex: 1; padding: 10px; background: var(--color-surface-2); border: 1.5px solid var(--color-border-2); border-radius: var(--radius-lg); font-size: var(--text-sm); font-weight: 600; cursor: pointer; }
-        .split-mode-btn.active { background: var(--color-accent-dim); border-color: var(--color-accent); color: var(--color-accent-light); }
-        .split-row { display: flex; align-items: center; gap: 12px; padding: 14px; background: var(--color-surface); border: 1px solid var(--color-border-2); border-radius: var(--radius-lg); }
-        .split-ava { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: white; flex-shrink: 0; }
-        .spinner { width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-      `}</style>
-    </div>
+      </div>
+    </>
   )
 }

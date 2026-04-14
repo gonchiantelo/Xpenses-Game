@@ -1,180 +1,125 @@
 'use client'
 
 import Link from 'next/link'
-import { useState, useEffect } from 'react'
-import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/hooks/useAuth'
-import { formatAmount, getPaletteById } from '@/lib/mockData'
-import BottomNav from '@/components/BottomNav'
-
 import { useXpenses } from '@/hooks/useXpenses'
+import { useAuth } from '@/hooks/useAuth'
+import FABAddExpense from '@/components/dashboard/FABAddExpense'
+
+const PALETTE_COLORS: Record<string, string> = {
+  green: '#00DF81', emerald: '#10B981', cyan: '#06B6D4',
+  violet: '#8B5CF6', rose: '#F43F5E', amber: '#F59E0B', slate: '#64748B',
+}
+
+const TYPE_LABELS: Record<string, string> = {
+  monthly: '📅 Hogar', travel: '✈️ Viaje', event: '🎉 Evento',
+}
 
 export default function GroupsPage() {
-  const { user } = useAuth()
-  const { groups, loading, error } = useXpenses()
+  const { user }              = useAuth()
+  const { groups, loading }   = useXpenses()
 
-  if (loading) return <div className="page" style={{display:'flex',justifyContent:'center',padding:'50px'}}><div className="spinner" /></div>
-  if (!user) return null
-
-  const userId = user.id
-  const myGroups = groups
+  if (loading) {
+    return (
+      <div className="flex flex-col gap-4 animate-pulse">
+        <div className="flex items-center justify-between mb-2">
+          <div className="skeleton h-7 w-32 rounded-lg" />
+          <div className="skeleton h-8 w-24 rounded-lg" />
+        </div>
+        {[1, 2, 3].map(i => (
+          <div key={i} className="skeleton h-28 w-full rounded-2xl" style={{ opacity: 1 - i * 0.15 }} />
+        ))}
+      </div>
+    )
+  }
 
   return (
-    <div className="page">
-      <header className="page-header">
+    <>
+      {/* Header */}
+      <header className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="page-header__title">Mis Grupos</h1>
-          <p className="page-header__subtitle">{myGroups.length} grupos activos</p>
+          <h1 className="text-xl font-extrabold text-primary tracking-tight">Mis Grupos</h1>
+          <p className="text-xs text-tertiary mt-0.5">
+            {groups.length} grupo{groups.length !== 1 ? 's' : ''} activo{groups.length !== 1 ? 's' : ''}
+          </p>
         </div>
-        <Link href="/groups/create" id="btn-create-group" className="btn btn--primary btn--sm">
-          + Nuevo grupo
+        <Link href="/groups/create" id="btn-create-group"
+          className="text-xs font-bold px-3 py-2 rounded-xl text-[#000F0A] transition-all duration-200 hover:scale-[1.02]"
+          style={{ background: 'linear-gradient(135deg, #00DF81 0%, #2CC295 100%)' }}>
+          + Nuevo
         </Link>
       </header>
 
-      <div className="page-content">
-        {myGroups.map(group => {
-          if (!group) return null // Seguridad extra
-          const palette = getPaletteById(group.palette || 'violet')
-          return (
-            <Link
-              key={group.id}
-              href={`/groups/${group.id}`}
-              id={`group-card-${group.id}`}
-              className="group-full-card"
-              style={{ '--accent': palette.color } as React.CSSProperties}
-            >
-              <div className="gfc-stripe" style={{ background: palette.color }} />
-              <div className="gfc-body">
-                <div className="gfc-header">
-                  <div className="gfc-emoji">{group.emoji}</div>
-                  <div className="gfc-info">
-                    <span className="gfc-name">{group.name}</span>
-                    <div className="gfc-tags">
-                      <span className="badge badge--neutral">
-                        {group.type === 'monthly' ? '📅 Hogar' : group.type === 'travel' ? '✈️ Viaje' : '🎉 Evento'}
-                      </span>
-                      <span className="badge badge--neutral">{group.currency}</span>
+      {/* Group Cards */}
+      {groups.length > 0 ? (
+        <div className="flex flex-col gap-3">
+          {groups.map(group => {
+            const color = PALETTE_COLORS[group.palette] ?? '#00DF81'
+            return (
+              <Link key={group.id} href={`/groups/${group.id}`}
+                id={`group-card-${group.id}`}
+                className="block rounded-2xl border border-subtle bg-surface overflow-hidden hover:border-accent/20 hover:-translate-y-0.5 hover:shadow-card-md active:scale-[0.99] transition-all duration-150">
+                {/* Color stripe */}
+                <div className="h-0.5 w-full" style={{ background: color }} />
+
+                <div className="p-4">
+                  {/* Header row */}
+                  <div className="flex items-start gap-3 mb-3">
+                    <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl shrink-0"
+                      style={{ background: `${color}15` }}>
+                      {group.emoji}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-base font-bold text-primary truncate">{group.name}</h3>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-surface-2 border border-subtle text-secondary">
+                          {TYPE_LABELS[group.type] ?? '📦 Grupo'}
+                        </span>
+                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-surface-2 border border-subtle text-secondary">
+                          {group.currency}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="gfc-members">
-                  {group.members?.map((m: any) => (
-                    <div key={m.user_id} className="member-pill">
-                      <div className="member-ava" style={{ background: 'var(--color-surface-3)' }}>
-                        {m.profiles?.first_name?.substring(0, 1) || '👤'}
-                      </div>
-                      <span>{m.user_id === userId ? 'Yo' : m.profiles?.first_name || 'Invitado'}</span>
+                  {/* Members */}
+                  {group.members && group.members.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {group.members.map((m: any) => (
+                        <div key={m.user_id}
+                          className="flex items-center gap-1.5 pl-1 pr-2.5 py-0.5 rounded-full border border-subtle bg-surface-2">
+                          <div className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0"
+                            style={{ background: color }}>
+                            {m.profiles?.first_name?.charAt(0)?.toUpperCase() || '?'}
+                          </div>
+                          <span className="text-xs font-medium text-secondary">
+                            {m.user_id === user?.id ? 'Yo' : m.profiles?.first_name || 'Invitado'}
+                          </span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
-              </div>
-            </Link>
-          )
-        })}
+              </Link>
+            )
+          })}
+        </div>
+      ) : (
+        /* Empty state */
+        <div className="flex flex-col items-center text-center py-16 animate-fade-in">
+          <div className="text-5xl mb-5">👥</div>
+          <h3 className="text-lg font-bold text-primary mb-2">No tenés grupos aún</h3>
+          <p className="text-sm text-secondary mb-8 max-w-xs">
+            Creá tu primer grupo para empezar a dividir gastos con amigos o familia.
+          </p>
+          <Link href="/groups/create" id="btn-create-first-group"
+            className="flex items-center gap-2 py-3 px-6 rounded-xl text-sm font-bold text-[#000F0A] transition-all duration-200 hover:scale-[1.02]"
+            style={{ background: 'linear-gradient(135deg, #00DF81 0%, #2CC295 100%)', boxShadow: '0 4px 20px rgba(0,223,129,0.25)' }}>
+            ✨ Crear grupo
+          </Link>
+        </div>
+      )}
 
-        {/* Empty state */}
-        {myGroups.length === 0 && (
-          <div className="empty-state">
-            <span className="empty-icon">👥</span>
-            <h3>No tenés grupos</h3>
-            <p>Creá tu primer grupo para empezar a dividir gastos</p>
-            <Link href="/groups/create" id="btn-create-first-group" className="btn btn--primary">
-              Crear grupo
-            </Link>
-          </div>
-        )}
-      </div>
-
-      <BottomNav />
-
-      <style jsx>{`
-        .group-full-card {
-          display: block;
-          background: var(--color-surface);
-          border: 1px solid var(--color-border-2);
-          border-radius: var(--radius-xl);
-          overflow: hidden;
-          text-decoration: none;
-          transition: all 0.2s;
-          position: relative;
-        }
-        .group-full-card:hover {
-          transform: translateY(-2px);
-          border-color: rgba(255,255,255,0.1);
-          box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-        }
-        .gfc-stripe {
-          height: 3px;
-          width: 100%;
-        }
-        .gfc-body {
-          padding: var(--space-4) var(--space-5);
-          display: flex;
-          flex-direction: column;
-          gap: var(--space-4);
-        }
-        .gfc-header {
-          display: flex;
-          align-items: flex-start;
-          gap: var(--space-3);
-        }
-        .gfc-emoji { font-size: 2rem; flex-shrink: 0; }
-        .gfc-info { flex: 1; }
-        .gfc-name {
-          display: block;
-          font-size: var(--text-lg);
-          font-weight: 700;
-          color: var(--color-text);
-          margin-bottom: 6px;
-        }
-        .gfc-tags { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-        .gfc-members {
-          display: flex;
-          flex-wrap: wrap;
-          gap: var(--space-2);
-        }
-        .member-pill {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          background: var(--color-surface-2);
-          border: 1px solid var(--color-border-2);
-          border-radius: var(--radius-full);
-          padding: 4px 10px 4px 4px;
-          font-size: var(--text-xs);
-          font-weight: 500;
-          color: var(--color-text-2);
-        }
-        .member-ava {
-          width: 22px;
-          height: 22px;
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 9px;
-          font-weight: 700;
-          color: white;
-        }
-        .gfc-budget {}
-        .gfc-budget-row {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-        .empty-state {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: var(--space-4);
-          padding: var(--space-16) var(--space-6);
-          text-align: center;
-        }
-        .empty-icon { font-size: 4rem; }
-        .empty-state h3 { font-size: var(--text-xl); font-weight: 700; }
-        .empty-state p { font-size: var(--text-sm); color: var(--color-text-2); }
-      `}</style>
-    </div>
+      <FABAddExpense />
+    </>
   )
 }
